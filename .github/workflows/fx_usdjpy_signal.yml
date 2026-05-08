@@ -1,0 +1,52 @@
+name: fx_usdjpy_signal
+
+# ============================================================
+# FX USD/JPY シグナル検証ワークフロー
+# 実注文なし・研究用シグナル生成のみ。
+# このワークフローは実注文APIを一切呼びません。
+# DRY_RUN=true / READ_ONLY=true を必ず維持してください。
+# ============================================================
+
+on:
+  schedule:
+    # JST 9:00 / 15:00 / 21:00 (UTC 0:00 / 6:00 / 12:00)
+    - cron: "0 0 * * *"
+    - cron: "0 6 * * *"
+    - cron: "0 12 * * *"
+
+  # 手動実行: Actions タブ → fx_usdjpy_signal → Run workflow
+  workflow_dispatch:
+
+jobs:
+  run-fx-signal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      # 実注文なし・研究用シグナルのみ。絶対に false にしないこと。
+      DRY_RUN: "true"
+      READ_ONLY: "true"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run FX USD/JPY signal (no live orders)
+        run: python scripts/run_fx_usdjpy_signal.py
+
+      - name: Upload signal state as artifact (optional)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fx-signals-usdjpy-${{ github.run_id }}
+          path: state/fx_signals_usdjpy.json
+          if-no-files-found: ignore
+          retention-days: 30

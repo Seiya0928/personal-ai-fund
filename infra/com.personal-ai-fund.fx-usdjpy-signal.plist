@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.personal-ai-fund.fx-usdjpy-signal</string>
+
+    <!-- 実注文なし・研究用シグナル生成のみ -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/apple/personal-ai-fund/venv/bin/python</string>
+        <string>scripts/run_fx_usdjpy_signal.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/apple/personal-ai-fund</string>
+
+    <!-- JST 9:00 / 15:00 / 21:00 = UTC 0:00 / 6:00 / 12:00 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>0</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>6</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>12</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>DRY_RUN</key>
+        <string>true</string>
+        <key>READ_ONLY</key>
+        <string>true</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/apple/personal-ai-fund/logs/fx_usdjpy_launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/apple/personal-ai-fund/logs/fx_usdjpy_launchd_err.log</string>
+
+    <!-- macOS がスリープ中の実行は次回起動時にスキップ -->
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

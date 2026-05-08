@@ -1,0 +1,33 @@
+# 秘密情報・環境変数
+.env
+
+# 仮想環境
+venv/
+.venv/
+
+# Python キャッシュ
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# ログ（生成物）
+logs/
+
+# データ（生成物・大容量・秘密情報含む可能性あり）
+data/*.db
+data/*.csv
+
+# 実行時生成物（シグナル履歴・注文状態・FX OHLCVデータ）
+state/
+
+# レポート（生成物）
+reports/
+
+# macOS
+.DS_Store
+
+# エディタ
+.vscode/
+.idea/
