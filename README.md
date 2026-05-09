@@ -688,3 +688,11 @@ python scripts/run_daily_personal_report.py --report-date 20260509
 | `state/fx_watch_signals.json` | シグナル履歴 + 評価結果 |
 | `reports/daily_personal_report_YYYYMMDD.md` | 日次レポート |
 | `reports/fx_watch_candidate_evaluation_YYYYMMDD.md` | 評価詳細レポート |
+
+## 常時稼働環境への移行方針
+
+- **現段階**（watch-only / paper trade / dry-run）は Mac launchd で運用する。
+- 実データで `BUY_CANDIDATE` / `FX_CANDIDATE` が出始め、dry-run注文記録を安定取得したくなった段階で **VPS移行を検討する**。
+- 極小ロットでも実注文に進む前には、Macスリープ依存をやめ、VPS等の常時稼働環境へ移行する。
+
+**理由**: エントリー機会損失より、保有中の**利確・損切り・timeout exitを逃すリスクの方が大きいため**。
