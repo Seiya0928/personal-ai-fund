@@ -22,8 +22,8 @@ data/*.csv
 # 実行時生成物（シグナル履歴・注文状態・FX OHLCVデータ）
 state/
 
-# レポート（生成物）
-reports/
+# レポート（生成物・ルート直下のみ）
+/reports/
 
 # macOS
 .DS_Store

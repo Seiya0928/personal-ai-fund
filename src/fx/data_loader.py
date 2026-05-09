@@ -124,22 +124,32 @@ class FXDataLoader:
         )
         return df
 
-    def resample(self, df_m15: pd.DataFrame, to: str = "4H") -> pd.DataFrame:
+    def resample(self, df: pd.DataFrame = None, to: str = "4H", df_m15: pd.DataFrame = None) -> pd.DataFrame:
         """
-        15分足 DataFrame を指定時間足にリサンプルする。
+        任意時間足の DataFrame を指定時間足にリサンプルする。
+        M15, H1 など、どの時間足でも入力として使用可能。
 
         Parameters
         ----------
-        df_m15 : pd.DataFrame
-            15分足 OHLCV（timestamp 列を持つ）
+        df : pd.DataFrame
+            入力 OHLCV（timestamp 列を持つ）。M15・H1 など任意の時間足。
         to : str
             pandas offset alias（例: "4H", "1H", "1D"）
+        df_m15 : pd.DataFrame
+            後方互換用エイリアス。df が None の場合に使用される。
 
         Returns
         -------
         pd.DataFrame
         """
-        df = df_m15.copy()
+        # 後方互換: df_m15 引数が渡された場合は df として使う
+        if df is None and df_m15 is not None:
+            df = df_m15
+        if df is None:
+            raise ValueError("df または df_m15 を指定してください")
+
+        src_timeframe = "input"
+        df = df.copy()
         if not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
             df["timestamp"] = pd.to_datetime(df["timestamp"])
         df = df.set_index("timestamp").sort_index()
@@ -154,5 +164,5 @@ class FXDataLoader:
             }
         ).dropna()
         resampled = resampled.reset_index()
-        log.info("resample: %s → %s, rows=%d", "M15", to, len(resampled))
+        log.info("resample: %s → %s, rows=%d", src_timeframe, to, len(resampled))
         return resampled

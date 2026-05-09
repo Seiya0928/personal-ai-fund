@@ -29,6 +29,15 @@ class FXBacktestResult:
     monthly_returns: dict      # "YYYY-MM" -> float (%)
     trades: list[dict] = field(default_factory=list)
     assumptions: dict = field(default_factory=dict)
+    buy_count: int = 0
+    sell_count: int = 0
+    avg_mfe_pips: float = 0.0
+    avg_mae_pips: float = 0.0
+    avg_mfe_win_pips: float = 0.0   # 勝ちトレードの平均MFE
+    avg_mfe_lose_pips: float = 0.0  # 負けトレードの平均MFE
+    avg_mae_win_pips: float = 0.0   # 勝ちトレードの平均MAE
+    avg_mae_lose_pips: float = 0.0  # 負けトレードの平均MAE
+    failed_after_half_tp_count: int = 0  # 一度TP50%以上まで順行したのに損切りになったトレード数
 
 
 class FXBacktestRunner:
@@ -85,8 +94,20 @@ class FXBacktestRunner:
         position: Optional[dict] = None  # 現在保有中のポジション
 
         for i, row in df.iterrows():
-            # ポジション保有中: SL/TP チェック
+            # ポジション保有中: MFE/MAE 更新 & SL/TP チェック
             if position is not None:
+                # MFE/MAE 更新（当該足のhigh/lowで計算）
+                if position["side"] == "LONG":
+                    favorable = float(row["high"]) - position["entry_price"]
+                    adverse   = position["entry_price"] - float(row["low"])
+                else:  # SHORT
+                    favorable = position["entry_price"] - float(row["low"])
+                    adverse   = float(row["high"]) - position["entry_price"]
+                position["mfe"] = max(position.get("mfe", 0.0), favorable)
+                position["mae"] = max(position.get("mae", 0.0), adverse)
+                tp_dist = abs(position["take_profit"] - position["entry_price"])
+                position["max_favorable_pct"] = position["mfe"] / tp_dist if tp_dist > 0 else 0.0
+
                 pnl, exit_price, exit_reason = self._check_exit(row, position)
                 if exit_reason is not None:
                     balance += pnl
@@ -100,6 +121,9 @@ class FXBacktestRunner:
                         "take_profit": position["take_profit"],
                         "pnl_jpy": round(pnl, 2),
                         "exit_reason": exit_reason,
+                        "mfe_pips": round(position.get("mfe", 0.0) / 0.01, 2),
+                        "mae_pips": round(position.get("mae", 0.0) / 0.01, 2),
+                        "max_favorable_pct": round(position.get("max_favorable_pct", 0.0), 4),
                     }
                     trades.append(trade_rec)
                     position = None
@@ -128,6 +152,7 @@ class FXBacktestRunner:
             close_price = float(last["close"])
             pnl = self._calc_pnl(position, close_price)
             balance += pnl
+            tp_dist = abs(position["take_profit"] - position["entry_price"])
             trades.append(
                 {
                     "entry_time": position["entry_time"],
@@ -139,6 +164,9 @@ class FXBacktestRunner:
                     "take_profit": position["take_profit"],
                     "pnl_jpy": round(pnl, 2),
                     "exit_reason": "FORCE_EXIT",
+                    "mfe_pips": round(position.get("mfe", 0.0) / 0.01, 2),
+                    "mae_pips": round(position.get("mae", 0.0) / 0.01, 2),
+                    "max_favorable_pct": round(position.get("max_favorable_pct", 0.0), 4),
                 }
             )
             equity_curve[-1] = balance
@@ -158,6 +186,29 @@ class FXBacktestRunner:
         max_dd_pct = self._calc_max_drawdown(equity_curve)
         max_losing_streak = self._calc_max_losing_streak(trades)
         monthly_returns = self._calc_monthly_returns(trades, df)
+
+        # --- MFE/MAE 集計 ---
+        buy_count = sum(1 for t in trades if t["side"] == "LONG")
+        sell_count = sum(1 for t in trades if t["side"] == "SHORT")
+
+        all_mfe = [t.get("mfe_pips", 0.0) for t in trades]
+        all_mae = [t.get("mae_pips", 0.0) for t in trades]
+        avg_mfe_pips = sum(all_mfe) / len(all_mfe) if all_mfe else 0.0
+        avg_mae_pips = sum(all_mae) / len(all_mae) if all_mae else 0.0
+
+        win_mfe = [t.get("mfe_pips", 0.0) for t in win_trades]
+        win_mae = [t.get("mae_pips", 0.0) for t in win_trades]
+        lose_mfe = [t.get("mfe_pips", 0.0) for t in lose_trades]
+        lose_mae = [t.get("mae_pips", 0.0) for t in lose_trades]
+        avg_mfe_win_pips = sum(win_mfe) / len(win_mfe) if win_mfe else 0.0
+        avg_mae_win_pips = sum(win_mae) / len(win_mae) if win_mae else 0.0
+        avg_mfe_lose_pips = sum(lose_mfe) / len(lose_mfe) if lose_mfe else 0.0
+        avg_mae_lose_pips = sum(lose_mae) / len(lose_mae) if lose_mae else 0.0
+
+        # 負けトレードのうち max_favorable_pct >= 0.5 の件数
+        failed_after_half_tp_count = sum(
+            1 for t in lose_trades if t.get("max_favorable_pct", 0.0) >= 0.5
+        )
 
         log.info(
             "FXBacktest[%s]: trades=%d, win_rate=%.1f%%, return=%.2f%%, mdd=%.2f%%",
@@ -188,6 +239,15 @@ class FXBacktestRunner:
                 "pip_value_jpy": self.pip_value_jpy,
                 "initial_balance": self.initial_balance,
             },
+            buy_count=buy_count,
+            sell_count=sell_count,
+            avg_mfe_pips=round(avg_mfe_pips, 2),
+            avg_mae_pips=round(avg_mae_pips, 2),
+            avg_mfe_win_pips=round(avg_mfe_win_pips, 2),
+            avg_mfe_lose_pips=round(avg_mfe_lose_pips, 2),
+            avg_mae_win_pips=round(avg_mae_win_pips, 2),
+            avg_mae_lose_pips=round(avg_mae_lose_pips, 2),
+            failed_after_half_tp_count=failed_after_half_tp_count,
         )
 
     @staticmethod

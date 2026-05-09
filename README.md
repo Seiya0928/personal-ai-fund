@@ -626,3 +626,59 @@ launchctl unload ~/Library/LaunchAgents/com.personal-ai-fund.fx-usdjpy-signal.pl
 
 Polymarket 関連は情報分析のみです。注文提案、手動承認付き実行ゲート、DRY_RUN注文記録、実注文の対象にはしません。
 重複の場合 `save()` が `False` を返してスキップし、エラーにはなりません。
+
+## FX Watch Candidate daily workflow
+
+> ⚠️ **観察専用・実注文なし。** OrderProposal化・DRY_RUN注文化・実発注はしません。
+
+### 初回セットアップ
+
+```bash
+# 長期 H1/D1 データを取得する（初回のみ）
+python scripts/fetch_fx_ohlcv_longterm.py
+```
+
+### 日次実行（推奨）
+
+```bash
+# シグナル生成 + 保存 + 過去シグナル評価 + Daily Personal Report 生成
+python scripts/run_daily_personal_report.py --save-watch-signal --evaluate-watch-signals
+```
+
+### 個別コマンド
+
+```bash
+# シグナル確認のみ（保存なし）
+python scripts/run_fx_watch_candidate.py
+
+# シグナル保存
+python scripts/run_fx_watch_candidate.py --save
+
+# 過去シグナル評価（48本タイムアウト）
+python scripts/evaluate_fx_watch_signals.py --timeout-bars 48 --save
+
+# Daily Personal Report のみ生成（シグナル新規生成・保存なし）
+python scripts/run_daily_personal_report.py
+
+# 特定日付のレポート生成
+python scripts/run_daily_personal_report.py --report-date 20260509
+```
+
+### ワークフロー概要
+
+```
+1. fetch_fx_ohlcv_longterm.py   — 長期データ取得（週1回程度）
+2. run_daily_personal_report.py — 日次実行（毎朝）
+   ├── FX Watch Candidate シグナル生成
+   ├── --save-watch-signal → state/fx_watch_signals.json に保存
+   ├── --evaluate-watch-signals → 過去 open シグナルをTP/SL判定
+   └── reports/daily_personal_report_YYYYMMDD.md を生成
+```
+
+### 出力ファイル
+
+| ファイル | 内容 |
+|----------|------|
+| `state/fx_watch_signals.json` | シグナル履歴 + 評価結果 |
+| `reports/daily_personal_report_YYYYMMDD.md` | 日次レポート |
+| `reports/fx_watch_candidate_evaluation_YYYYMMDD.md` | 評価詳細レポート |

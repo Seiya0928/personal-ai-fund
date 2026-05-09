@@ -30,6 +30,7 @@ class ValidationResult:
     price_range_violations: int
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    ohlc_violation_rows: list[int] = field(default_factory=list)  # 違反行のインデックス
 
     def summary(self) -> str:
         """ログ出力用のサマリー文字列を返す。"""
@@ -154,6 +155,7 @@ class OHLCVValidator:
             | (df["low"] > df["close"])
         )
         ohlc_violations = int(ohlc_mask.sum())
+        ohlc_violation_rows: list[int] = list(df.index[ohlc_mask].tolist()) if ohlc_violations > 0 else []
         if ohlc_violations > 0:
             warnings.append(f"OHLCV 整合性違反: {ohlc_violations} 件 (high<low 等)")
 
@@ -182,6 +184,7 @@ class OHLCVValidator:
             price_range_violations=price_range_violations,
             warnings=warnings,
             errors=errors,
+            ohlc_violation_rows=ohlc_violation_rows,
         )
         log.info("OHLCVValidator[%s]: %s", timeframe, result.summary())
         return result

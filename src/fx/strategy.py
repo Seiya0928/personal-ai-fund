@@ -30,6 +30,8 @@ class MultiTimeframeEMAStrategy:
         slippage_pips: float = 0.1,
         account_balance: float = 1_000_000.0,
         pip_value_jpy: float = 100.0,
+        entry_timeframe: str = "M15",
+        trend_timeframe: str = "H4",
     ) -> None:
         self.ema_fast = ema_fast
         self.ema_slow = ema_slow
@@ -42,6 +44,8 @@ class MultiTimeframeEMAStrategy:
         self.slippage_pips = slippage_pips
         self.account_balance = account_balance
         self.pip_value_jpy = pip_value_jpy
+        self.entry_timeframe = entry_timeframe
+        self.trend_timeframe = trend_timeframe
         # USD/JPY: 1pip = 0.01
         self._pip = 0.01
 
@@ -51,34 +55,39 @@ class MultiTimeframeEMAStrategy:
 
     def generate_signals(
         self,
-        df_h4: pd.DataFrame,
-        df_m15: pd.DataFrame,
+        df_trend: pd.DataFrame,
+        df_entry: pd.DataFrame,
         account_balance: float | None = None,
+        # 後方互換: df_h4, df_m15 を位置引数で渡しても動作する
+        **kwargs,
     ) -> pd.DataFrame:
         """
         入力:
-            df_h4: 4時間足 OHLCV (timestamp, open, high, low, close, volume)
-            df_m15: 15分足 OHLCV
+            df_trend: トレンド判定用上位足 OHLCV（H4 または D1）
+            df_entry: エントリー足 OHLCV（M15 または H1）
             account_balance: 口座残高（円）。None の場合は self.account_balance を使用。
         出力:
-            df_m15 に以下カラムを追加した DataFrame:
+            df_entry に以下カラムを追加した DataFrame:
             trend, ema_fast, ema_slow, recent_high, recent_low,
             signal (1=BUY, -1=SELL, 0=FLAT),
             stop_loss, take_profit, atr,
             entry_price (終値 + spread/slippage込み),
             lot_size (FXPositionSizer によるロットサイズ)
-        """
-        df_h4 = df_h4.copy()
-        df_m15 = df_m15.copy()
 
-        # --- Step 1: 4時間足 EMA 計算 ---
+        後方互換性:
+            generate_signals(df_h4, df_m15) の呼び出し形式もそのまま動作する。
+        """
+        df_h4 = df_trend.copy()
+        df_m15 = df_entry.copy()
+
+        # --- Step 1: 上位足 EMA 計算 ---
         df_h4["ema_fast"] = self._compute_ema(df_h4["close"], self.ema_fast)
         df_h4["ema_slow"] = self._compute_ema(df_h4["close"], self.ema_slow)
         df_h4["trend"] = "FLAT"
         df_h4.loc[df_h4["ema_fast"] > df_h4["ema_slow"], "trend"] = "UP"
         df_h4.loc[df_h4["ema_fast"] < df_h4["ema_slow"], "trend"] = "DOWN"
 
-        # --- Step 2: H4 の値を M15 に前向き伝播 ---
+        # --- Step 2: 上位足の値をエントリー足に前向き伝播 ---
         h4_cols = self._align_h4_to_m15(df_h4, df_m15)
         df_m15 = df_m15.join(h4_cols)
 
@@ -201,7 +210,7 @@ class MultiTimeframeEMAStrategy:
         h4 = df_h4[["timestamp", "ema_fast", "ema_slow", "trend"]].copy()
         h4 = h4.set_index("timestamp").sort_index()
 
-        m15_ts = pd.Series(df_m15["timestamp"].values, index=df_m15.index)
+        m15_ts = df_m15["timestamp"]
 
         # M15 の各タイムスタンプに対して H4 の直近値を取得
         combined = h4.reindex(

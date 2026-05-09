@@ -79,8 +79,21 @@ class YFinanceFetcher:
         return self._normalize(raw)
 
     def fetch_m15(self, period: str = "60d") -> pd.DataFrame:
-        """15分足を取得する。"""
+        """
+        15分足を取得する。
+
+        注意: yfinance の M15 データは直近60日分のみ取得可能。
+        長期検証には fetch_h1() を使用してください。
+        """
         return self.fetch(interval="15m", period=period)
+
+    def fetch_h1(self, period: str = "730d") -> pd.DataFrame:
+        """H1（1時間足）データを取得"""
+        return self.fetch("1h", period)
+
+    def fetch_d1(self, period: str = "5y") -> pd.DataFrame:
+        """D1（日足）データを取得"""
+        return self.fetch("1d", period)
 
     def fetch_h4(self, period: str = "730d") -> pd.DataFrame:
         """
