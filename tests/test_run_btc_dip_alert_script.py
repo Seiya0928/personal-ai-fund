@@ -85,6 +85,35 @@ def _buy_candidate_assessment(as_of_jst="2026-05-05T22:00:05+09:00"):
     return assessment
 
 
+def _buy_watch_assessment(as_of_jst="2026-05-05T15:00:05+09:00"):
+    assessment = _buy_skip_assessment(as_of_jst)
+    assessment.buy_status = "BUY_WATCH"
+    assessment.market.current_price = 99.0
+    assessment.market.previous_close = 100.0
+    assessment.market.day_change_pct = -1.0
+    assessment.market.recent_high = 103.0
+    assessment.market.drop_from_recent_high_pct = -3.88
+    assessment.market.sma200 = 101.0
+    assessment.market.above_sma200 = False
+    assessment.checklists["buy"] = {
+        "dip_trigger": False,
+        "trend_ok": False,
+        "watch_buy_line_near": True,
+        "trend_filter_blocking": True,
+    }
+    assessment.reasons = [
+        "前日比が -1.00% で、買い条件 -3.00% 以下を未達",
+        "SMA200 を下回っており、長期上昇トレンド条件を未達",
+        "買い候補ラインまで +2.06% で、監視距離 4.00% 以内",
+    ]
+    assessment.next_price_lines = {
+        "buy_candidate_line": 97.0,
+        "distance_to_buy_line_pct": 2.06,
+        "distance_to_sma200_pct": -1.98,
+    }
+    return assessment
+
+
 def test_test_discord_mode_does_not_update_state(monkeypatch, tmp_path, capsys):
     state_path = tmp_path / "state.json"
     called = {"save_state": False}
@@ -367,3 +396,87 @@ def test_run_script_important_email_notification_still_uses_should_notify(monkey
     assert sent["subjects"] == ["【BTC Alert】買い候補"]
     assert "Should notify: True" in output
     assert "Email notification sent" in output
+
+
+def test_run_script_buy_candidate_saves_order_proposal_and_paper_trades(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(run_btc_dip_alert, "parse_args", lambda: _base_args(tmp_path, dry_run_notify=True))
+    monkeypatch.setattr(run_btc_dip_alert, "load_default_assessment", lambda position, config: _buy_candidate_assessment())
+    monkeypatch.setattr(
+        run_btc_dip_alert,
+        "datetime",
+        type("FixedDateTime", (), {
+            "now": staticmethod(lambda tz: datetime.fromisoformat("2026-05-05T22:00:05+09:00"))
+        }),
+    )
+
+    exit_code = run_btc_dip_alert.main()
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "Buy status: BUY_CANDIDATE" in output
+    assert "Order proposal saved: True" in output
+    assert "Paper trades created: 3" in output
+
+    proposals = json.loads((tmp_path / "order_proposals.json").read_text(encoding="utf-8"))["proposals"]
+    trades = json.loads((tmp_path / "paper_trades.json").read_text(encoding="utf-8"))["paper_trades"]
+    assert len(proposals) == 1
+    assert proposals[0]["source_status"] == "BUY_CANDIDATE"
+    assert proposals[0]["send_to_exchange"] is False
+    assert proposals[0]["requires_manual_confirmation"] is True
+    assert proposals[0]["max_loss_jpy"] > 0
+    assert len(trades) == 3
+    assert {trade["rule_id"] for trade in trades} == {"Conservative", "Current", "Wide"}
+
+
+def test_run_script_buy_watch_notifies_without_order_proposal_or_paper_trade(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(run_btc_dip_alert, "parse_args", lambda: _base_args(tmp_path, send_email=True, dry_run_notify=True))
+    monkeypatch.setattr(run_btc_dip_alert, "load_default_assessment", lambda position, config: _buy_watch_assessment())
+    monkeypatch.setattr(
+        run_btc_dip_alert,
+        "datetime",
+        type("FixedDateTime", (), {
+            "now": staticmethod(lambda tz: datetime.fromisoformat("2026-05-05T15:00:05+09:00"))
+        }),
+    )
+
+    exit_code = run_btc_dip_alert.main()
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "Buy status: BUY_WATCH" in output
+    assert "Should notify: True" in output
+    assert "Order proposal saved: False" in output
+    assert "source_status=BUY_WATCH は注文案生成対象外" in output
+    assert "Paper trades created: 0" in output
+    assert not (tmp_path / "order_proposals.json").exists()
+
+
+def test_stale_market_data_does_not_notify_or_create_order_proposal(monkeypatch, tmp_path, capsys):
+    assessment = _buy_candidate_assessment()
+    assessment.market.data_stale_level = "invalid"
+    assessment.market.data_stale_reason = "market data is older than 24h: age=25.0h"
+    assessment.warnings = [assessment.market.data_stale_reason]
+
+    monkeypatch.setattr(run_btc_dip_alert, "parse_args", lambda: _base_args(tmp_path, send_email=True))
+    monkeypatch.setattr(run_btc_dip_alert, "load_default_assessment", lambda position, config: assessment)
+    monkeypatch.setattr(
+        run_btc_dip_alert,
+        "load_email_config_from_env",
+        lambda: run_btc_dip_alert.EmailConfig("smtp.gmail.com", 587, "user@example.com", "secret", "from@example.com", "to@example.com"),
+    )
+    monkeypatch.setattr(
+        run_btc_dip_alert,
+        "datetime",
+        type("FixedDateTime", (), {
+            "now": staticmethod(lambda tz: datetime.fromisoformat("2026-05-05T15:00:05+09:00"))
+        }),
+    )
+
+    exit_code = run_btc_dip_alert.main()
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "Should notify: False" in output
+    assert "Order proposal saved: False" in output
+    assert "market data is older than 24h" in output
+    assert not (tmp_path / "order_proposals.json").exists()

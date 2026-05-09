@@ -19,6 +19,17 @@ fi
 
 {
   echo "[$(date '+%Y-%m-%d %H:%M:%S %z')] run_daily_btc_alert start"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S %z')] fetch_btc_price start"
+  ./venv/bin/python scripts/fetch_btc_price.py
+  fetch_exit_code=$?
+  echo "[$(date '+%Y-%m-%d %H:%M:%S %z')] fetch_btc_price exit_code=${fetch_exit_code}"
+  ./venv/bin/python -c "from src.storage.sqlite_store import SQLiteStore; t=SQLiteStore().load_latest_ticker('BTC_JPY'); print('Latest BTC_JPY ticker timestamp: ' + (str(t.get('timestamp')) if t else 'None'))"
+  if [[ "${fetch_exit_code}" -ne 0 ]]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S %z')] fetch_btc_price failed; skip run_btc_dip_alert to avoid stale-market judgment"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S %z')] run_daily_btc_alert exit_code=${fetch_exit_code}"
+    exit "${fetch_exit_code}"
+  fi
+  echo "[$(date '+%Y-%m-%d %H:%M:%S %z')] run_btc_dip_alert start"
   ./venv/bin/python scripts/run_btc_dip_alert.py --send-email --markdown --send-daily-summary
   exit_code=$?
   echo "[$(date '+%Y-%m-%d %H:%M:%S %z')] run_daily_btc_alert exit_code=${exit_code}"

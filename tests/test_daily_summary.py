@@ -56,6 +56,17 @@ def _assessment(buy_status="BUY_SKIP"):
     )
 
 
+def _summary_body_for_status(buy_status: str) -> str:
+    return build_daily_summary_body(
+        _assessment(buy_status),
+        "2026-05-05T22:00:05+09:00",
+        should_notify=buy_status != "BUY_SKIP",
+        signal_history=[],
+        paper_trade_open_count=0,
+        markdown_report_path=Path("reports/btc_jpy_dip_alert_20260505.md"),
+    )
+
+
 def test_22_jst_run_is_daily_summary_target(tmp_path):
     decision = should_send_daily_summary(
         "2026-05-05T22:00:05+09:00",
@@ -171,3 +182,65 @@ def test_buy_skip_daily_summary_is_sendable(monkeypatch, tmp_path):
 
     assert result.sent is True
     assert sent["subject"] == "【BTC Alert Daily】日次サマリー"
+
+
+def test_daily_summary_includes_signal_counts_and_paper_trade_performance():
+    body = build_daily_summary_body(
+        _assessment("BUY_WATCH"),
+        "2026-05-05T22:00:05+09:00",
+        should_notify=True,
+        signal_history=[
+            {"created_at": "2026-05-05T09:00:05+09:00", "buy_status": "BUY_SKIP"},
+            {"created_at": "2026-05-05T15:00:05+09:00", "buy_status": "BUY_WATCH"},
+            {"created_at": "2026-05-05T22:00:05+09:00", "buy_status": "BUY_CANDIDATE"},
+        ],
+        paper_trade_open_count=2,
+        markdown_report_path=Path("reports/btc_jpy_dip_alert_20260505.md"),
+        paper_trade_performance=[
+            {
+                "rule_id": "Current",
+                "trades": 3,
+                "open": 2,
+                "closed": 1,
+                "win_rate": 100.0,
+                "total_pnl_jpy": 120.5,
+                "take_profit_count": 1,
+                "stop_loss_count": 0,
+                "timeout_count": 0,
+            }
+        ],
+    )
+
+    assert "今日のBUY_WATCH件数: 1" in body
+    assert "今日のBUY_CANDIDATE件数: 1" in body
+    assert "最新の候補/監視状態: 2026-05-05T22:00:05+09:00 / BUY_CANDIDATE" in body
+    assert "paper trade open件数: 2" in body
+    assert "paper trade closed件数: 1" in body
+    assert "paper trade 損益合計: ¥120.50" in body
+    assert "Paper trade Current: trades=3, open=2, closed=1" in body
+
+
+def test_daily_summary_includes_next_action_for_buy_skip_watch_and_candidate():
+    assert "次アクション: 何もしない。記録のみ。" in _summary_body_for_status("BUY_SKIP")
+    watch_body = _summary_body_for_status("BUY_WATCH")
+    candidate_body = _summary_body_for_status("BUY_CANDIDATE")
+
+    assert "次アクション: 監視のみ。手動購入しない。注文案は作らない。" in watch_body
+    assert "order proposal" not in watch_body
+    assert "次アクション: order proposalを確認し、必要ならdry-run注文記録を作る。実注文はまだしない。" in candidate_body
+    assert "実注文はまだしない" in candidate_body
+
+
+def test_daily_summary_includes_stale_invalid_next_action():
+    assessment = _assessment("BUY_CANDIDATE")
+    assessment.market.data_stale_level = "invalid"
+    body = build_daily_summary_body(
+        assessment,
+        "2026-05-05T22:00:05+09:00",
+        should_notify=False,
+        signal_history=[],
+        paper_trade_open_count=0,
+        markdown_report_path=Path("reports/btc_jpy_dip_alert_20260505.md"),
+    )
+
+    assert "次アクション: 市場データが古いため判断無効。fetch/health checkを確認。" in body

@@ -22,6 +22,9 @@ def test_run_daily_btc_alert_script_is_safe():
     assert "READ_ONLY=false" not in content
     assert "ALERT_EMAIL_PASSWORD" not in content
     assert "--send-daily-summary" in content
+    assert "scripts/fetch_btc_price.py" in content
+    assert content.index("scripts/fetch_btc_price.py") < content.index("scripts/run_btc_dip_alert.py")
+    assert "skip run_btc_dip_alert to avoid stale-market judgment" in content
     assert "echo" not in content or "ALERT_EMAIL_PASSWORD" not in content
 
 

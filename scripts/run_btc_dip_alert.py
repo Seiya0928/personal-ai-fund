@@ -251,18 +251,22 @@ def main() -> int:
         previous_state = load_notification_state(args.state_path)
         decision = notify_decision(assessment, previous_state=previous_state, force_notify=args.force_notify)
         proposal_source_status = None
-        if assessment.hold_status in {"TAKE_PROFIT_CANDIDATE", "STOP_LOSS_CANDIDATE", "TIMEOUT_EXIT_CANDIDATE"}:
+        if assessment.market.data_stale_level == "invalid":
+            proposal_source_status = None
+        elif assessment.hold_status in {"TAKE_PROFIT_CANDIDATE", "STOP_LOSS_CANDIDATE", "TIMEOUT_EXIT_CANDIDATE"}:
             proposal_source_status = assessment.hold_status
         elif assessment.buy_status == "BUY_CANDIDATE":
             proposal_source_status = "BUY_CANDIDATE"
-        elif assessment.buy_status == "BUY_WATCH" and decision.should_notify:
-            proposal_source_status = "BUY_WATCH"
 
-        proposal, proposal_reason = generate_order_proposal(
-            assessment,
-            proposal_jpy=args.proposal_jpy,
-            source_status=proposal_source_status,
-        )
+        if assessment.market.data_stale_level == "invalid":
+            proposal = None
+            proposal_reason = assessment.market.data_stale_reason or "market data stale"
+        else:
+            proposal, proposal_reason = generate_order_proposal(
+                assessment,
+                proposal_jpy=args.proposal_jpy,
+                source_status=proposal_source_status,
+            )
         assessment.order_proposal = proposal
         if proposal is not None:
             stored_proposal, saved = save_order_proposal(proposal, args.order_proposals_path)
@@ -358,6 +362,7 @@ def main() -> int:
             signal_history=signals[-20:],
             paper_trade_open_count=all_open_count,
             markdown_report_path=report_path,
+            paper_trade_performance=paper_performance,
         )
         daily_summary_result = maybe_send_daily_summary_email(
             daily_summary_body,

@@ -18,11 +18,18 @@ from src.risk.execution_gate import (
     validate_limit_order_shape,
     validate_manual_execution_proposal,
 )
+from src.risk.kill_switch import KillSwitch
 from src.risk.order_sizing import BTC_JPY_MIN_QUANTITY
 
 DEFAULT_DRY_RUN_ORDERS_PATH = Path(__file__).resolve().parents[2] / "state" / "dry_run_orders.json"
 DRY_RUN_ORDER_APPROVAL_PHRASE = "RECORD DRY RUN ORDER"
 DRY_RUN_ORDER_RECORDED_NOTE = "DRY_RUN order recorded. No exchange order sent."
+DRY_RUN_ALLOWED_SOURCE_STATUSES = {
+    "BUY_CANDIDATE",
+    "TAKE_PROFIT_CANDIDATE",
+    "STOP_LOSS_CANDIDATE",
+    "TIMEOUT_EXIT_CANDIDATE",
+}
 JST = ZoneInfo("Asia/Tokyo")
 
 
@@ -78,6 +85,8 @@ def validate_dry_run_safety(
     read_only: bool,
     stop_trading_file: Path = DEFAULT_STOP_TRADING_FILE,
 ) -> None:
+    if proposal.get("source_status") not in DRY_RUN_ALLOWED_SOURCE_STATUSES:
+        raise ValueError("proposal.source_status is not dry-run order eligible")
     validate_manual_execution_proposal(
         proposal,
         dry_run=dry_run,
@@ -110,35 +119,72 @@ def build_dry_run_order_record(
     read_only: bool,
     dry_run: bool,
 ) -> dict:
+    source_signal_id = proposal.get("source_signal_id") or proposal.get("signal_id")
+    price = int(order_body["price"])
+    size = order_body["size"]
     return {
         "dry_run_order_id": _next_dry_run_order_id(proposal["symbol"], created_at, existing_orders),
         "created_at": created_at,
         "source_order_proposal_id": proposal["proposal_id"],
+        "source_signal_id": source_signal_id,
         "symbol": proposal["symbol"],
         "gmo_spot_symbol": order_body["symbol"],
         "side": order_body["side"],
         "execution_type": order_body["executionType"],
-        "price": int(order_body["price"]),
-        "size": order_body["size"],
+        "price": price,
+        "entry_price": price,
+        "size": size,
         "estimated_jpy": proposal["estimated_jpy"],
+        "notional_jpy": proposal["estimated_jpy"],
+        "stop_loss": proposal.get("stop_loss"),
+        "take_profit": proposal.get("take_profit"),
+        "max_loss_jpy": proposal.get("max_loss_jpy"),
         "reason": proposal["source_status"],
         "status": "dry_run_recorded",
         "send_to_exchange": False,
         "requires_manual_confirmation": True,
         "approval_phrase_confirmed": True,
+        "approval_status": "confirmed",
         "read_only": read_only,
         "dry_run": dry_run,
     }
 
 
+def _same_source_signal_order(existing: dict, record: dict) -> bool:
+    source_signal_id = record.get("source_signal_id")
+    return (
+        source_signal_id not in {None, ""}
+        and existing.get("source_signal_id") == source_signal_id
+        and existing.get("symbol") == record.get("symbol")
+        and existing.get("side") == record.get("side")
+        and int(existing.get("price", 0)) == int(record.get("price", 0))
+    )
+
+
 def save_dry_run_order_record(record: dict, path: Path = DEFAULT_DRY_RUN_ORDERS_PATH) -> tuple[dict, bool]:
     payload = load_dry_run_orders(path)
     for existing in payload["dry_run_orders"]:
-        if existing.get("source_order_proposal_id") == record["source_order_proposal_id"]:
+        if existing.get("source_order_proposal_id") == record["source_order_proposal_id"] or _same_source_signal_order(existing, record):
             return existing, False
     payload["dry_run_orders"].append(record)
     save_dry_run_orders(payload, path)
     return record, True
+
+
+def _find_existing_dry_run_order_for_proposal(proposal_id: str, path: Path) -> Optional[dict]:
+    for order in list_dry_run_orders(path):
+        if order.get("source_order_proposal_id") == proposal_id:
+            return order
+    return None
+
+
+def _validate_runtime_safety(dry_run: bool, read_only: bool, stop_trading_file: Path) -> None:
+    if not dry_run:
+        raise ValueError("DRY_RUN must be true")
+    if not read_only:
+        raise ValueError("READ_ONLY must be true")
+    if KillSwitch(stop_trading_file).is_active():
+        raise ValueError("kill switch is active")
 
 
 def record_dry_run_order_from_proposal(
@@ -154,6 +200,10 @@ def record_dry_run_order_from_proposal(
     require_approval_phrase(approval_phrase, DRY_RUN_ORDER_APPROVAL_PHRASE)
     proposal = find_order_proposal(proposal_id, order_proposals_path)
     order_body = build_order_body_from_proposal(proposal)
+    _validate_runtime_safety(dry_run, read_only, stop_trading_file)
+    existing_order = _find_existing_dry_run_order_for_proposal(proposal_id, dry_run_orders_path)
+    if existing_order is not None:
+        return existing_order, order_body
     validate_dry_run_safety(
         proposal,
         order_body,

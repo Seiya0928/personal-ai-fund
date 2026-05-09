@@ -194,9 +194,12 @@ tail -n 50 logs/launchd_btc_alert.stderr.log
 - `BTC_JPY` の open position は 1 件運用を前提とする
 - 複数 open position がある場合は合算せず、最新の 1 件だけを判定対象にして警告を出す
 
-### 10. 手動確認用の注文案
+### 10. BTC BUY_WATCH と手動確認用の注文案
 
-- `BUY_CANDIDATE` と通知対象の `BUY_WATCH` では BUY 注文案を生成する
+- `BUY_SKIP` は通常の観測記録で、買い候補ラインまでの距離と trend_filter の不足分を確認する
+- `BUY_WATCH` は買い候補に近い監視状態として記録・通知するが、BUY 注文案は生成しない
+- `BUY_WATCH` 通知は同日1回までを基本とし、通知本文に WATCH 理由とまだ買わない理由を含める
+- `BUY_CANDIDATE` でのみ BUY 注文案を生成する
 - `TAKE_PROFIT_CANDIDATE` / `STOP_LOSS_CANDIDATE` / `TIMEOUT_EXIT_CANDIDATE` では SELL 注文案を生成する
 - 注文案は `state/order_proposals.json` に保存する
 - 戦略・通知・表示上の `symbol` は `BTC_JPY` のまま使う
@@ -226,6 +229,8 @@ tail -n 50 logs/launchd_btc_alert.stderr.log
 - `READ_ONLY=true` / `DRY_RUN=true` を維持する
 - 通常利用では承認フレーズ `RECORD DRY RUN ORDER` を手入力する
 - `--yes-i-understand-dry-run-only` はテスト・CI 用
+- 同じ proposal、または同じ `source_signal_id` / `symbol` / `side` / `price` の dry-run 注文記録は重複保存しない
+- `STOP_TRADING` が存在する場合は dry-run 注文記録も停止する
 
 ```bash
 ./venv/bin/python scripts/list_order_proposals.py
@@ -239,6 +244,7 @@ tail -n 50 logs/launchd_btc_alert.stderr.log
 - `DRY_RUN=true`
 - `READ_ONLY=true`
 - `proposal.status=proposed`
+- `proposal.source_status` が `BUY_CANDIDATE` / 利確候補 / 損切り候補 / timeout候補
 - `proposal.send_to_exchange=false`
 - `proposal.requires_manual_confirmation=true`
 - `stop_loss` / `take_profit` / `max_loss_jpy` / 根拠 / 無効条件が入っている

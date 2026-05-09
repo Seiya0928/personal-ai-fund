@@ -41,6 +41,7 @@ class OrderProposal:
     max_loss_jpy: Optional[float] = None
     rationale: Optional[list[str]] = None
     invalidation_conditions: Optional[list[str]] = None
+    source_signal_id: Optional[str] = None
 
 
 def _floor_quantity(quantity: float) -> Decimal:
@@ -179,7 +180,7 @@ def generate_order_proposal(
 ) -> tuple[Optional[dict], Optional[str]]:
     source_status = source_status or (assessment.hold_status or assessment.buy_status)
     created_at = assessment.market.as_of_jst
-    if source_status in {"BUY_CANDIDATE", "BUY_WATCH"}:
+    if source_status == "BUY_CANDIDATE":
         suggested_price = int(assessment.next_price_lines.get("buy_candidate_line", 0) or 0)
         if suggested_price <= 0:
             return None, "buy_candidate_line がないため BUY proposal を生成できません。"
@@ -196,7 +197,7 @@ def generate_order_proposal(
             suggested_price=sized.price,
             suggested_size=sized.quantity,
             estimated_jpy=round(sized.amount_jpy, 2),
-            reason="買い候補ライン到達または接近のため、手動確認用のBUY注文案を生成",
+            reason="買い条件に一致したため、手動確認用のBUY注文案を生成",
             source_status=source_status,
             risk_notes=[
                 "実発注は行っていません。",

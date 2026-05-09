@@ -16,6 +16,10 @@ def _make_log(*blocks: str) -> str:
     return "\n".join(blocks) + "\n"
 
 
+def _fresh_market(now):
+    return module.MarketDataFreshness(now, 0.0, "fresh", None)
+
+
 def test_health_ok_with_should_notify_false(tmp_path):
     log_path = tmp_path / "btc_dip_alert_20260430.log"
     log_path.write_text(
@@ -32,7 +36,7 @@ def test_health_ok_with_should_notify_false(tmp_path):
     )
     now = datetime(2026, 4, 30, 9, 30, 0, tzinfo=module.JST)
 
-    result = module.evaluate_health(now, log_path)
+    result = module.evaluate_health(now, log_path, _fresh_market(now))
 
     assert result.ok is True
     assert result.last_run.email_skipped_reason == "should_notify=false"
@@ -61,7 +65,7 @@ def test_health_ok_with_email_sent(tmp_path):
     )
     now = datetime(2026, 4, 30, 15, 30, 0, tzinfo=module.JST)
 
-    result = module.evaluate_health(now, log_path)
+    result = module.evaluate_health(now, log_path, _fresh_market(now))
 
     assert result.ok is True
 
@@ -82,7 +86,7 @@ def test_health_ng_when_exit_code_is_non_zero(tmp_path):
     )
     now = datetime(2026, 4, 30, 9, 30, 0, tzinfo=module.JST)
 
-    result = module.evaluate_health(now, log_path)
+    result = module.evaluate_health(now, log_path, _fresh_market(now))
 
     assert result.ok is False
     assert result.reason == "last exit_code=1"
@@ -90,7 +94,7 @@ def test_health_ng_when_exit_code_is_non_zero(tmp_path):
 
 def test_health_ng_when_log_is_missing(tmp_path):
     now = datetime(2026, 4, 30, 9, 30, 0, tzinfo=module.JST)
-    result = module.evaluate_health(now, tmp_path / "missing.log")
+    result = module.evaluate_health(now, tmp_path / "missing.log", _fresh_market(now))
     assert result.ok is False
     assert result.reason == "log file not found"
 
@@ -111,7 +115,7 @@ def test_health_ng_when_expected_run_missing(tmp_path):
     )
     now = datetime(2026, 4, 30, 15, 30, 0, tzinfo=module.JST)
 
-    result = module.evaluate_health(now, log_path)
+    result = module.evaluate_health(now, log_path, _fresh_market(now))
 
     assert result.ok is False
     assert result.reason == "no run after expected time 15:00"
@@ -132,9 +136,41 @@ def test_render_health_includes_summary_fields(tmp_path):
         encoding="utf-8",
     )
     now = datetime(2026, 4, 30, 9, 30, 0, tzinfo=module.JST)
-    result = module.evaluate_health(now, log_path)
+    result = module.evaluate_health(now, log_path, _fresh_market(now))
     output = module.render_health(result)
 
     assert "Status: OK" in output
     assert "Buy status: BUY_SKIP" in output
     assert "Email: skipped / should_notify=false" in output
+    assert "Market data stale level: fresh" in output
+
+
+def test_health_ng_when_market_data_is_stale(tmp_path):
+    log_path = tmp_path / "btc_dip_alert_20260430.log"
+    log_path.write_text(
+        _make_log(
+            "[2026-04-30 09:00:02 +0900] run_daily_btc_alert start",
+            "Buy status: BUY_SKIP",
+            "Should notify: False",
+            "Email sent: False",
+            "Email skipped reason: should_notify=false",
+            "Markdown report saved: /tmp/report.md",
+            "[2026-04-30 09:00:03 +0900] run_daily_btc_alert exit_code=0",
+        ),
+        encoding="utf-8",
+    )
+    now = datetime(2026, 4, 30, 9, 30, 0, tzinfo=module.JST)
+    stale = module.MarketDataFreshness(
+        latest_ticker_at=datetime(2026, 4, 29, 8, 30, 0, tzinfo=module.JST),
+        age_hours=25.0,
+        stale_level="invalid",
+        stale_reason="market data is older than 24h: age=25.0h",
+    )
+
+    result = module.evaluate_health(now, log_path, stale)
+    output = module.render_health(result)
+
+    assert result.ok is False
+    assert result.reason == "market data stale: market data is older than 24h: age=25.0h"
+    assert "Latest ticker: 2026-04-29 08:30:00 JST" in output
+    assert "Market data age: 25.00h" in output

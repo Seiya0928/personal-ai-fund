@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from src.alerts.btc_dip_alert import AlertAssessment, BTC_JPY_ALERT_CONFIG
 
@@ -14,6 +16,7 @@ def default_state_path_for_symbol(symbol: str) -> Path:
 
 
 DEFAULT_STATE_PATH = default_state_path_for_symbol(BTC_JPY_ALERT_CONFIG.symbol)
+JST = ZoneInfo("Asia/Tokyo")
 
 
 @dataclass
@@ -79,6 +82,17 @@ def _distance_to_buy_line_pct(assessment: AlertAssessment) -> Optional[float]:
     return round((current / line - 1) * 100, 2)
 
 
+def _same_jst_date(left: Optional[str], right: str) -> bool:
+    if not left:
+        return False
+    try:
+        left_dt = datetime.fromisoformat(left).astimezone(JST)
+        right_dt = datetime.fromisoformat(right).astimezone(JST)
+    except ValueError:
+        return False
+    return left_dt.date() == right_dt.date()
+
+
 def _notification_hash(title: str, message: str) -> str:
     return hashlib.sha256(f"{title}\n{message}".encode("utf-8")).hexdigest()
 
@@ -118,21 +132,40 @@ def _build_primary_message(
             reasons,
         )
     if status == "BUY_WATCH":
-        if distance_to_buy_line_pct is not None and distance_to_buy_line_pct <= 3.0:
-            reasons.append(f"買い候補ラインまであと {distance_to_buy_line_pct:.2f}%")
-            return (
-                "【BTC Alert】買い候補に接近",
-                (
-                    f"{assessment.display_symbol} が買い候補ラインまであと {distance_to_buy_line_pct:.2f}% です。\n"
-                    f"現在価格：¥{assessment.market.current_price:,.0f}\n"
-                    f"買い候補ライン：¥{assessment.next_price_lines['buy_candidate_line']:,.0f}\n"
-                    "判定：まだ見送り"
-                ),
-                "medium",
-                reasons,
-            )
-        reasons.append("BUY_WATCH だが買い候補ラインまで 3% 超")
-        return "", "", "low", reasons
+        reasons.append("BUY_WATCH は監視通知対象。ただし注文案は生成しない")
+        watch_reasons = assessment.reasons[:4] or ["買い候補に近い監視条件を検知"]
+        no_buy_reasons = [
+            reason
+            for reason in assessment.reasons
+            if "未達" in reason or "NG" in reason or "下回って" in reason
+        ][:3]
+        if not no_buy_reasons:
+            no_buy_reasons = ["BUY_CANDIDATE の全条件はまだ満たしていない"]
+        sma_distance = assessment.next_price_lines.get("distance_to_sma200_pct")
+        message_lines = [
+            f"{assessment.display_symbol} が買い候補に近い監視状態です。",
+            f"現在価格：¥{assessment.market.current_price:,.0f}",
+            f"前日比：{assessment.market.day_change_pct:+.2f}%",
+            f"14日高値からの下落率：{assessment.market.drop_from_recent_high_pct:+.2f}%",
+            f"SMA200：¥{assessment.market.sma200:,.0f} / close>SMA200={assessment.market.above_sma200}",
+        ]
+        if sma_distance is not None:
+            message_lines.append(f"SMA200まであと：{sma_distance:+.2f}%")
+        message_lines.extend(
+            [
+                f"買い候補ライン：¥{assessment.next_price_lines['buy_candidate_line']:,.0f}",
+                f"買い候補ラインまであと：{distance_to_buy_line_pct:+.2f}%",
+                f"WATCH理由：{'; '.join(watch_reasons)}",
+                f"まだ買わない理由：{'; '.join(no_buy_reasons)}",
+                "実発注は行いません。監視用の通知です。",
+            ]
+        )
+        return (
+            "【BTC Alert】買い候補ウォッチ",
+            "\n".join(message_lines),
+            "medium",
+            reasons,
+        )
     if status == "TAKE_PROFIT_CANDIDATE":
         pnl = assessment.position["unrealized_pnl_pct"]
         return (
@@ -190,6 +223,19 @@ def notify_decision(
     effective_status = _effective_status(assessment)
     previous_effective_status = previous_state.effective_status
     distance_to_buy_line_pct = _distance_to_buy_line_pct(assessment)
+    if assessment.market.data_stale_level == "invalid":
+        return NotificationDecision(
+            should_notify=False,
+            notification_type=effective_status,
+            title="",
+            message="",
+            priority="low",
+            reasons=[assessment.market.data_stale_reason or "market data is stale; notification suppressed"],
+            distance_to_buy_line_pct=distance_to_buy_line_pct,
+            effective_status=effective_status,
+            previous_effective_status=previous_effective_status,
+            deduped=False,
+        )
 
     title, message, priority, reasons = _build_primary_message(
         assessment,
@@ -212,6 +258,14 @@ def notify_decision(
 
     deduped = False
     if message:
+        if (
+            effective_status == "BUY_WATCH"
+            and _same_jst_date(previous_state.last_notification_at, assessment.market.as_of_jst)
+            and not force_notify
+        ):
+            reasons.append("BUY_WATCH は同日通知済みのため重複通知を抑止")
+            should_notify = False
+            deduped = True
         current_hash = _notification_hash(title, message)
         if current_hash == previous_state.last_notification_hash and not force_notify:
             reasons.append("前回通知と同一内容のため重複通知を抑止")

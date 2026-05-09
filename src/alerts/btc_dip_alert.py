@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -12,8 +12,13 @@ from src.storage.sqlite_store import SQLiteStore
 
 JST = ZoneInfo("Asia/Tokyo")
 DEFAULT_INTERVAL = "1day"
+MARKET_DATA_WARNING_AFTER = timedelta(hours=6)
+MARKET_DATA_INVALID_AFTER = timedelta(hours=24)
 BASELINE_PARAMS = {
     "dip_threshold_pct": 3.0,
+    "watch_distance_to_buy_line_pct": 4.0,
+    "watch_min_drop_from_recent_high_pct": 2.0,
+    "watch_day_drop_progress_ratio": 0.5,
     "recent_high_lookback_days": 14,
     "trend_filter": True,
     "volatility_filter": "none",
@@ -77,6 +82,9 @@ class MarketSnapshot:
     last_entry_date_jst: Optional[str]
     days_since_last_entry: Optional[int]
     has_position: bool
+    data_age_hours: Optional[float] = None
+    data_stale_level: str = "fresh"
+    data_stale_reason: Optional[str] = None
 
 
 @dataclass
@@ -136,7 +144,13 @@ def _latest_entry_info(df: pd.DataFrame, params: dict) -> tuple[Optional[pd.Time
     return last_entry, (now_jst - last_jst).days
 
 
-def build_market_snapshot(rows: list[dict], latest_ticker: Optional[dict], has_position: bool, params: Optional[dict] = None) -> MarketSnapshot:
+def build_market_snapshot(
+    rows: list[dict],
+    latest_ticker: Optional[dict],
+    has_position: bool,
+    params: Optional[dict] = None,
+    now: Optional[datetime] = None,
+) -> MarketSnapshot:
     params = params or BASELINE_PARAMS
     df = _parse_rows(rows)
     current_bar = df.iloc[-1]
@@ -155,6 +169,21 @@ def build_market_snapshot(rows: list[dict], latest_ticker: Optional[dict], has_p
             as_of_utc = pd.to_datetime(latest_ticker["timestamp"], utc=True)
         except Exception:
             pass
+    age_hours = None
+    stale_level = "fresh"
+    stale_reason = None
+    if now is not None:
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=JST)
+        now_utc = now.astimezone(ZoneInfo("UTC"))
+        data_age = now_utc - as_of_utc.to_pydatetime()
+        age_hours = max(data_age.total_seconds() / 3600, 0.0)
+        if data_age >= MARKET_DATA_INVALID_AFTER:
+            stale_level = "invalid"
+            stale_reason = f"market data is older than 24h: age={age_hours:.1f}h"
+        elif data_age >= MARKET_DATA_WARNING_AFTER:
+            stale_level = "warning"
+            stale_reason = f"market data is older than 6h: age={age_hours:.1f}h"
     return MarketSnapshot(
         as_of_utc=as_of_utc.isoformat(),
         as_of_jst=as_of_utc.tz_convert(JST).isoformat(),
@@ -168,11 +197,18 @@ def build_market_snapshot(rows: list[dict], latest_ticker: Optional[dict], has_p
         last_entry_date_jst=last_entry_ts.tz_convert(JST).date().isoformat() if last_entry_ts is not None else None,
         days_since_last_entry=days_since_last_entry,
         has_position=has_position,
+        data_age_hours=round(age_hours, 2) if age_hours is not None else None,
+        data_stale_level=stale_level,
+        data_stale_reason=stale_reason,
     )
 
 
 def evaluate_buy(snapshot: MarketSnapshot, params: Optional[dict] = None) -> tuple[str, dict, list[str], dict]:
     params = params or BASELINE_PARAMS
+    buy_line = snapshot.previous_close * (1 - params["dip_threshold_pct"] / 100)
+    distance_to_buy_line_pct = round((snapshot.current_price / buy_line - 1) * 100, 2) if buy_line else None
+    distance_to_sma200 = distance_to_sma200_pct(snapshot)
+    watch_day_drop_threshold = -params["dip_threshold_pct"] * params.get("watch_day_drop_progress_ratio", 0.5)
     checks = {
         "dip_trigger": snapshot.day_change_pct <= -params["dip_threshold_pct"],
         "trend_ok": (not params["trend_filter"]) or snapshot.above_sma200,
@@ -180,6 +216,15 @@ def evaluate_buy(snapshot: MarketSnapshot, params: Optional[dict] = None) -> tup
         "cooldown_ok": snapshot.days_since_last_entry is None or snapshot.days_since_last_entry >= params["cooldown_days"],
         "recent_high_filter_ok": snapshot.drop_from_recent_high_pct <= -params.get("min_drop_from_recent_high_pct", 0.0),
         "no_position": not snapshot.has_position,
+        "watch_buy_line_near": (
+            distance_to_buy_line_pct is not None
+            and 0 <= distance_to_buy_line_pct <= params.get("watch_distance_to_buy_line_pct", 4.0)
+        ),
+        "watch_recent_high_pullback": (
+            snapshot.drop_from_recent_high_pct <= -params.get("watch_min_drop_from_recent_high_pct", 2.0)
+        ),
+        "watch_day_drop_progress": snapshot.day_change_pct <= watch_day_drop_threshold,
+        "trend_filter_blocking": params["trend_filter"] and not snapshot.above_sma200,
     }
     reasons = []
     if not checks["dip_trigger"]:
@@ -193,16 +238,40 @@ def evaluate_buy(snapshot: MarketSnapshot, params: Optional[dict] = None) -> tup
     if not checks["no_position"]:
         reasons.append("保有中のため新規買い判定を停止")
 
-    met_count = sum(checks.values())
-    if all(checks.values()):
+    candidate_checks = [
+        checks["dip_trigger"],
+        checks["trend_ok"],
+        checks["entry_gap_ok"],
+        checks["cooldown_ok"],
+        checks["recent_high_filter_ok"],
+        checks["no_position"],
+    ]
+    watch_triggers = [
+        checks["watch_buy_line_near"],
+        checks["watch_recent_high_pullback"],
+        checks["watch_day_drop_progress"],
+        checks["dip_trigger"] and not checks["trend_ok"],
+    ]
+    if all(candidate_checks):
         status = "BUY_CANDIDATE"
-    elif checks["trend_ok"] and checks["no_position"] and met_count >= 4:
+    elif checks["no_position"] and any(watch_triggers):
         status = "BUY_WATCH"
+        if checks["watch_buy_line_near"]:
+            reasons.append(f"買い候補ラインまで {distance_to_buy_line_pct:+.2f}% で、監視距離 {params.get('watch_distance_to_buy_line_pct', 4.0):.2f}% 以内")
+        if checks["watch_recent_high_pullback"]:
+            reasons.append(f"直近14日高値から {snapshot.drop_from_recent_high_pct:+.2f}% 下落し、監視水準に到達")
+        if checks["watch_day_drop_progress"]:
+            reasons.append(f"前日比 {snapshot.day_change_pct:+.2f}% で、急落条件に向けた下落進行を検知")
+        if checks["trend_filter_blocking"]:
+            reasons.append("trend_filter は NG だが、買い候補接近の監視対象として記録")
     else:
         status = "BUY_SKIP"
 
-    buy_line = snapshot.previous_close * (1 - params["dip_threshold_pct"] / 100)
-    return status, checks, reasons, {"buy_candidate_line": round(buy_line, 0)}
+    return status, checks, reasons, {
+        "buy_candidate_line": round(buy_line, 0),
+        "distance_to_buy_line_pct": distance_to_buy_line_pct,
+        "distance_to_sma200_pct": distance_to_sma200,
+    }
 
 
 def evaluate_position(snapshot: MarketSnapshot, position: Optional[PositionInput], params: Optional[dict] = None) -> tuple[Optional[str], dict, list[str], Optional[dict]]:
@@ -260,15 +329,27 @@ def build_alert_assessment(
     config: Optional[AlertConfig] = None,
     positions: Optional[list[dict]] = None,
     warnings: Optional[list[str]] = None,
+    now: Optional[datetime] = None,
 ) -> AlertAssessment:
     config = config or BTC_JPY_ALERT_CONFIG
     params = config.params
-    snapshot = build_market_snapshot(rows, latest_ticker, position is not None, params)
+    snapshot = build_market_snapshot(rows, latest_ticker, position is not None, params, now=now)
     buy_status, buy_checks, reasons, next_lines = evaluate_buy(snapshot, params)
     hold_status, hold_checks, action_reasons, position_summary = evaluate_position(snapshot, position, params)
     if position_summary is not None:
         next_lines["take_profit_line"] = position_summary["take_profit_line"]
         next_lines["stop_loss_line"] = position_summary["stop_loss_line"]
+    stale_warnings = []
+    if snapshot.data_stale_reason:
+        stale_warnings.append(snapshot.data_stale_reason)
+    if snapshot.data_stale_level == "invalid":
+        buy_status = "BUY_SKIP"
+        hold_status = None if position_summary is None else "HOLD"
+        buy_checks["fresh_market_data"] = False
+        reasons.insert(0, "市場データが24時間以上古いため、売買候補判定を無効化")
+        action_reasons.append("市場データが24時間以上古いため、保有アクション判定を無効化")
+    else:
+        buy_checks["fresh_market_data"] = True
     return AlertAssessment(
         symbol=config.symbol,
         display_symbol=config.display_symbol,
@@ -282,7 +363,7 @@ def build_alert_assessment(
         next_price_lines=next_lines,
         position=position_summary,
         positions=positions or [],
-        warnings=warnings or [],
+        warnings=[*(warnings or []), *stale_warnings],
         reference_backtest=config.reference_backtest,
         note="これは投資助言ではなく、自分用の機械的判断補助です。実発注は行わず、GMOサポート回答前は発注系を再開しません。",
     )
@@ -295,6 +376,38 @@ def assessment_to_dict(assessment: AlertAssessment) -> dict:
     return payload
 
 
+def _format_data_age(age_hours: Optional[float]) -> str:
+    return "unknown" if age_hours is None else f"{age_hours:.2f}h"
+
+
+def distance_to_buy_candidate_line_pct(assessment: AlertAssessment) -> Optional[float]:
+    line = assessment.next_price_lines.get("buy_candidate_line")
+    if not line:
+        return None
+    return round((float(assessment.market.current_price) / float(line) - 1) * 100, 2)
+
+
+def distance_to_sma200_pct(snapshot: MarketSnapshot) -> Optional[float]:
+    if not snapshot.sma200:
+        return None
+    return round((float(snapshot.current_price) / float(snapshot.sma200) - 1) * 100, 2)
+
+
+def next_action_text(assessment: AlertAssessment) -> str:
+    if assessment.market.data_stale_level == "invalid":
+        return "市場データが古いため判断無効。fetch/health checkを確認。"
+    status = assessment.hold_status or assessment.buy_status
+    actions = {
+        "BUY_SKIP": "何もしない。記録のみ。",
+        "BUY_WATCH": "監視のみ。手動購入しない。注文案は作らない。",
+        "BUY_CANDIDATE": "order proposalを確認し、必要ならdry-run注文記録を作る。実注文はまだしない。",
+        "TAKE_PROFIT_CANDIDATE": "SELL proposalを確認し、dry-run決済記録を作る。実注文はまだしない。",
+        "STOP_LOSS_CANDIDATE": "SELL proposalを確認し、損切りリハーサルを優先する。実注文はまだしない。",
+        "TIMEOUT_EXIT_CANDIDATE": "保有期限切れ候補としてSELL proposalを確認する。実注文はまだしない。",
+    }
+    return actions.get(status, "記録のみ。実注文はまだしない。")
+
+
 def render_cli(assessment: AlertAssessment) -> str:
     lines = [
         f"{assessment.display_symbol} Dip Alert",
@@ -303,7 +416,9 @@ def render_cli(assessment: AlertAssessment) -> str:
         f"Prev close: ¥{assessment.market.previous_close:,.0f} ({assessment.market.day_change_pct:+.2f}%)",
         f"Recent 14d high: ¥{assessment.market.recent_high:,.0f} ({assessment.market.drop_from_recent_high_pct:+.2f}% from high)",
         f"SMA200: ¥{assessment.market.sma200:,.0f} / close>SMA200={assessment.market.above_sma200}",
+        f"Market data age: {_format_data_age(assessment.market.data_age_hours)} / stale={assessment.market.data_stale_level}",
         f"Buy status: {assessment.buy_status}",
+        f"Next action: {next_action_text(assessment)}",
     ]
     if assessment.reasons:
         lines.append("Buy reasons:")
@@ -317,6 +432,12 @@ def render_cli(assessment: AlertAssessment) -> str:
     buy_line = assessment.next_price_lines.get("buy_candidate_line")
     if buy_line is not None:
         lines.append(f"Buy candidate line: ¥{buy_line:,.0f}")
+        distance = assessment.next_price_lines.get("distance_to_buy_line_pct")
+        if distance is not None:
+            lines.append(f"Distance to buy candidate line: {distance:+.2f}%")
+    sma_distance = assessment.next_price_lines.get("distance_to_sma200_pct")
+    if sma_distance is not None:
+        lines.append(f"Distance to SMA200: {sma_distance:+.2f}%")
     if assessment.position:
         lines.append(f"Position id: {assessment.position.get('id')}")
         lines.append(f"Take profit line: ¥{assessment.next_price_lines['take_profit_line']:,.0f}")
@@ -395,6 +516,9 @@ def render_markdown(assessment: AlertAssessment) -> str:
         f"- Buy status: {assessment.buy_status}",
         f"- Hold status: {assessment.hold_status or 'NO_POSITION'}",
         f"- As of JST: {assessment.market.as_of_jst}",
+        f"- Market data age hours: {_format_data_age(assessment.market.data_age_hours)}",
+        f"- Market data stale level: {assessment.market.data_stale_level}",
+        f"- 次アクション: {next_action_text(assessment)}",
         "",
         "## 市況",
         "",
@@ -437,6 +561,10 @@ def render_markdown(assessment: AlertAssessment) -> str:
     ]
     if "buy_candidate_line" in assessment.next_price_lines:
         lines.append(f"- 買い候補ライン: ¥{assessment.next_price_lines['buy_candidate_line']:,.0f}")
+    if "distance_to_buy_line_pct" in assessment.next_price_lines:
+        lines.append(f"- 買い候補ラインまであと: {assessment.next_price_lines['distance_to_buy_line_pct']:+.2f}%")
+    if "distance_to_sma200_pct" in assessment.next_price_lines:
+        lines.append(f"- SMA200まであと: {assessment.next_price_lines['distance_to_sma200_pct']:+.2f}%")
     if assessment.position:
         lines += [
             f"- 利確ライン: ¥{assessment.next_price_lines['take_profit_line']:,.0f}",
@@ -659,4 +787,4 @@ def load_default_assessment(position: Optional[PositionInput] = None, config: Op
     if not rows:
         raise ValueError("保存済みの日足データがありません。先に fetch_btc_price.py を実行してください。")
     ticker = store.load_latest_ticker(config.symbol)
-    return build_alert_assessment(rows, ticker, position, config)
+    return build_alert_assessment(rows, ticker, position, config, now=datetime.now(JST))

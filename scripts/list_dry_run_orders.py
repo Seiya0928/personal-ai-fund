@@ -27,7 +27,11 @@ def main() -> None:
             f"{order['dry_run_order_id']} | {order['created_at']} | "
             f"{order['source_order_proposal_id']} | {order['symbol']} | "
             f"{order['gmo_spot_symbol']} | {order['side']} | {order['price']} | "
-            f"{order['size']} | {order['estimated_jpy']} | {order['status']}"
+            f"{order['size']} | notional={order.get('notional_jpy', order.get('estimated_jpy'))} | "
+            f"max_loss={order.get('max_loss_jpy')} | stop={order.get('stop_loss')} | "
+            f"take={order.get('take_profit')} | source_signal={order.get('source_signal_id')} | "
+            f"approval={order.get('approval_status', 'confirmed' if order.get('approval_phrase_confirmed') else 'unconfirmed')} | "
+            f"{order['status']}"
         )
 
 

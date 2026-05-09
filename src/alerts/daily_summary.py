@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from src.alerts.btc_dip_alert import AlertAssessment
+from src.alerts.btc_dip_alert import AlertAssessment, next_action_text
 from src.alerts.email_notifier import (
     EmailConfig,
     EmailSendResult,
@@ -83,6 +83,16 @@ def _pct_to_buy_candidate_line(assessment: AlertAssessment) -> Optional[float]:
     return round((float(assessment.market.current_price) / float(line) - 1) * 100, 2)
 
 
+def _pct_to_sma200(assessment: AlertAssessment) -> Optional[float]:
+    if not assessment.market.sma200:
+        return None
+    return round((float(assessment.market.current_price) / float(assessment.market.sma200) - 1) * 100, 2)
+
+
+def _format_data_age(age_hours: Optional[float]) -> str:
+    return "unknown" if age_hours is None else f"{age_hours:.2f}h"
+
+
 def _today_run_statuses(signals: list[dict], run_date: str) -> dict:
     statuses = {"09:00": "missing", "15:00": "missing", "22:00": "missing"}
     for signal in signals:
@@ -99,6 +109,53 @@ def _today_run_statuses(signals: list[dict], run_date: str) -> dict:
     return statuses
 
 
+def _status_count(signals: list[dict], status: str) -> int:
+    return sum(
+        1
+        for signal in signals
+        if (signal.get("hold_status") or signal.get("buy_status")) == status
+    )
+
+
+def _latest_signal_status(signals: list[dict]) -> str:
+    if not signals:
+        return "None"
+    latest = signals[-1]
+    created_at = latest.get("created_at") or "unknown"
+    status = latest.get("hold_status") or latest.get("buy_status") or "unknown"
+    return f"{created_at} / {status}"
+
+
+def _paper_trade_totals(paper_trade_performance: Optional[list[dict]]) -> dict:
+    performance = paper_trade_performance or []
+    return {
+        "open": sum(int(row.get("open", 0)) for row in performance),
+        "closed": sum(int(row.get("closed", 0)) for row in performance),
+        "total_pnl_jpy": round(sum(float(row.get("total_pnl_jpy", 0.0)) for row in performance), 2),
+    }
+
+
+def _format_paper_trade_performance(paper_trade_performance: Optional[list[dict]]) -> list[str]:
+    lines = []
+    for row in paper_trade_performance or []:
+        lines.append(
+            "Paper trade {rule}: trades={trades}, open={open}, closed={closed}, "
+            "win_rate={win_rate:.2f}%, total_pnl_jpy=¥{total_pnl_jpy:,.2f}, "
+            "TP={tp}, SL={sl}, TIMEOUT={timeout}".format(
+                rule=row.get("rule_id"),
+                trades=int(row.get("trades", 0)),
+                open=int(row.get("open", 0)),
+                closed=int(row.get("closed", 0)),
+                win_rate=float(row.get("win_rate", 0.0)),
+                total_pnl_jpy=float(row.get("total_pnl_jpy", 0.0)),
+                tp=int(row.get("take_profit_count", 0)),
+                sl=int(row.get("stop_loss_count", 0)),
+                timeout=int(row.get("timeout_count", 0)),
+            )
+        )
+    return lines
+
+
 def build_daily_summary_body(
     assessment: AlertAssessment,
     run_started_at_jst: str,
@@ -106,17 +163,25 @@ def build_daily_summary_body(
     signal_history: list[dict],
     paper_trade_open_count: int,
     markdown_report_path: Path,
+    paper_trade_performance: Optional[list[dict]] = None,
 ) -> str:
     run_date = datetime.fromisoformat(run_started_at_jst).astimezone(JST).date().isoformat()
     run_statuses = _today_run_statuses(signal_history, run_date)
+    today_signals = [signal for signal in signal_history if str(signal.get("created_at", "")).startswith(run_date)]
+    trade_totals = _paper_trade_totals(paper_trade_performance)
     distance = _pct_to_buy_candidate_line(assessment)
+    sma_distance = _pct_to_sma200(assessment)
     buy_line = assessment.next_price_lines.get("buy_candidate_line")
-    return "\n".join(
-        [
+    lines = [
             "BTC Alert Daily Summary",
             "",
             f"実行時刻: {run_started_at_jst}",
+            f"判定に使った価格時刻: {assessment.market.as_of_jst}",
+            f"Market data age: {_format_data_age(assessment.market.data_age_hours)}",
+            f"Market data stale level: {assessment.market.data_stale_level}",
+            f"Market data stale reason: {assessment.market.data_stale_reason}",
             f"Buy status: {assessment.buy_status}",
+            f"次アクション: {next_action_text(assessment)}",
             f"Should notify: {should_notify}",
             f"Current price: ¥{assessment.market.current_price:,.0f}",
             f"Prev close / 前日比: ¥{assessment.market.previous_close:,.0f} / {assessment.market.day_change_pct:+.2f}%",
@@ -124,10 +189,17 @@ def build_daily_summary_body(
             f"14日高値からの下落率: {assessment.market.drop_from_recent_high_pct:+.2f}%",
             f"SMA200: ¥{assessment.market.sma200:,.0f}",
             f"close > SMA200: {assessment.market.above_sma200}",
+            f"SMA200まであと何%: {sma_distance:+.2f}%" if sma_distance is not None else "SMA200まであと何%: None",
             f"Buy candidate line: ¥{buy_line:,.0f}" if buy_line is not None else "Buy candidate line: None",
             f"買い候補ラインまであと何%: {distance:+.2f}%" if distance is not None else "買い候補ラインまであと何%: None",
+            "WATCH/SKIP理由: " + "; ".join(assessment.reasons[:5]) if assessment.reasons else "WATCH/SKIP理由: None",
             f"signal_history の直近件数: {len(signal_history)}",
+            f"今日のBUY_WATCH件数: {_status_count(today_signals, 'BUY_WATCH')}",
+            f"今日のBUY_CANDIDATE件数: {_status_count(today_signals, 'BUY_CANDIDATE')}",
+            f"最新の候補/監視状態: {_latest_signal_status(signal_history)}",
             f"paper trade open件数: {paper_trade_open_count}",
+            f"paper trade closed件数: {trade_totals['closed']}",
+            f"paper trade 損益合計: ¥{trade_totals['total_pnl_jpy']:,.2f}",
             f"今日の09:00実行状況: {run_statuses['09:00']}",
             f"今日の15:00実行状況: {run_statuses['15:00']}",
             f"今日の22:00実行状況: {run_statuses['22:00']}",
@@ -135,8 +207,12 @@ def build_daily_summary_body(
             "",
             "実発注は行っていません。",
             "これは投資助言ではなく、自分用の機械的判断補助です。",
-        ]
-    )
+    ]
+    performance_lines = _format_paper_trade_performance(paper_trade_performance)
+    if performance_lines:
+        lines.insert(-2, "")
+        lines[-2:-2] = performance_lines
+    return "\n".join(lines)
 
 
 def maybe_send_daily_summary_email(

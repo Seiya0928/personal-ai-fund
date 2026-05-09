@@ -54,13 +54,30 @@ def test_buy_watch_notifies_within_three_percent():
     assert decision.distance_to_buy_line_pct == 2.04
 
 
-def test_buy_watch_does_not_notify_when_far():
+def test_buy_watch_notifies_even_when_watch_reason_is_pullback_not_line_distance():
     assessment = _assessment(buy_status="BUY_WATCH", current_price=105.0, buy_line=98.0)
 
     decision = notify_decision(assessment)
 
+    assert decision.should_notify is True
+    assert decision.priority == "medium"
+    assert "まだ買わない理由" in decision.message
+
+
+def test_buy_watch_is_suppressed_after_same_day_notification():
+    assessment = _assessment(buy_status="BUY_WATCH", current_price=100.0, buy_line=98.0)
+
+    decision = notify_decision(
+        assessment,
+        previous_state=NotificationState(
+            effective_status="BUY_WATCH",
+            last_notification_at="2026-04-29T09:00:00+09:00",
+        ),
+    )
+
     assert decision.should_notify is False
-    assert "3% 超" in " ".join(decision.reasons)
+    assert decision.deduped is True
+    assert "同日通知済み" in " ".join(decision.reasons)
 
 
 def test_duplicate_notification_is_suppressed():

@@ -45,6 +45,32 @@ def test_buy_proposal_creates_three_rule_paper_trades():
     assert reason == "created"
     assert len(records) == 3
     assert {record["rule_id"] for record in records} == {"Conservative", "Current", "Wide"}
+    assert all(record["entry_price"] == proposal["suggested_price"] for record in records)
+    assert all(record["take_profit_line"] > record["entry_price"] for record in records)
+    assert all(record["stop_loss_line"] < record["entry_price"] for record in records)
+    assert all(record["max_holding_deadline"] for record in records)
+
+
+def test_duplicate_paper_trades_are_not_saved_twice(tmp_path):
+    prices = [100 + i for i in range(210)] + [320, 325, 330, 335, 340]
+    assessment = build_alert_assessment(
+        _make_rows(prices),
+        {"last": 323.0, "timestamp": "2026-04-29T00:00:00Z"},
+        None,
+        BTC_JPY_ALERT_CONFIG,
+    )
+    assessment.notification = {"should_notify": True, "notification_type": "BUY_CANDIDATE"}
+    signal = build_signal_record(assessment)
+    proposal, _ = generate_order_proposal(assessment, proposal_jpy=1_000.0, source_status="BUY_CANDIDATE")
+    records, _ = create_paper_trades_from_buy_proposal(signal, proposal)
+
+    _, first_count = save_paper_trade_records(records, tmp_path / "paper_trades.json")
+    stored, second_count = save_paper_trade_records(records, tmp_path / "paper_trades.json")
+
+    assert first_count == 3
+    assert second_count == 0
+    assert len(stored) == 3
+    assert len(list_paper_trades(tmp_path / "paper_trades.json")) == 3
 
 
 def test_update_open_paper_trades_closes_for_take_profit_stop_loss_and_timeout(tmp_path):

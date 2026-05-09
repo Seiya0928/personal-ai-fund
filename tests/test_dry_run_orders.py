@@ -14,6 +14,7 @@ from src.alerts.order_proposal import list_order_proposals, save_order_proposal
 def _proposal(**overrides):
     data = {
         "proposal_id": "proposal_test_001",
+        "source_signal_id": "btc_jpy_20260508_090000_buy_candidate",
         "created_at": "2026-05-08T09:00:00+09:00",
         "symbol": "BTC_JPY",
         "side": "BUY",
@@ -67,7 +68,14 @@ def test_proposal_creates_dry_run_order_and_updates_status(tmp_path):
     assert record["source_order_proposal_id"] == proposal["proposal_id"]
     assert record["gmo_spot_symbol"] == "BTC"
     assert record["price"] == 11_904_180
+    assert record["entry_price"] == 11_904_180
     assert record["size"] == "0.00008000"
+    assert record["notional_jpy"] == 952.33
+    assert record["stop_loss"] == 10_416_157.0
+    assert record["take_profit"] == 13_094_598.0
+    assert record["max_loss_jpy"] == 119.04
+    assert record["source_signal_id"] == "btc_jpy_20260508_090000_buy_candidate"
+    assert record["approval_status"] == "confirmed"
     assert record["send_to_exchange"] is False
     assert record["read_only"] is True
     assert record["dry_run"] is True
@@ -97,6 +105,112 @@ def test_wrong_approval_phrase_does_not_record(tmp_path):
 
     assert list_dry_run_orders(orders_path) == []
     assert list_order_proposals(proposals_path)[0]["status"] == "proposed"
+
+
+def test_duplicate_dry_run_order_from_same_proposal_is_not_saved_twice(tmp_path):
+    proposals_path = tmp_path / "order_proposals.json"
+    orders_path = tmp_path / "dry_run_orders.json"
+    proposal = _save(proposals_path)
+
+    first, _ = record_dry_run_order_from_proposal(
+        proposal["proposal_id"],
+        DRY_RUN_ORDER_APPROVAL_PHRASE,
+        dry_run=True,
+        read_only=True,
+        order_proposals_path=proposals_path,
+        dry_run_orders_path=orders_path,
+        created_at="2026-05-08T09:00:00+09:00",
+    )
+    second, _ = record_dry_run_order_from_proposal(
+        proposal["proposal_id"],
+        DRY_RUN_ORDER_APPROVAL_PHRASE,
+        dry_run=True,
+        read_only=True,
+        order_proposals_path=proposals_path,
+        dry_run_orders_path=orders_path,
+        created_at="2026-05-08T15:00:00+09:00",
+    )
+
+    assert first["dry_run_order_id"] == second["dry_run_order_id"]
+    assert len(list_dry_run_orders(orders_path)) == 1
+
+
+def test_duplicate_dry_run_order_from_same_source_signal_is_not_saved_twice(tmp_path):
+    proposals_path = tmp_path / "order_proposals.json"
+    orders_path = tmp_path / "dry_run_orders.json"
+    first_proposal = _proposal(proposal_id="proposal_test_001")
+    second_proposal = _proposal(proposal_id="proposal_test_002")
+    proposals_path.write_text(
+        json.dumps({"proposals": [first_proposal, second_proposal]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    first, _ = record_dry_run_order_from_proposal(
+        first_proposal["proposal_id"],
+        DRY_RUN_ORDER_APPROVAL_PHRASE,
+        dry_run=True,
+        read_only=True,
+        order_proposals_path=proposals_path,
+        dry_run_orders_path=orders_path,
+        created_at="2026-05-08T09:00:00+09:00",
+    )
+    second, _ = record_dry_run_order_from_proposal(
+        second_proposal["proposal_id"],
+        DRY_RUN_ORDER_APPROVAL_PHRASE,
+        dry_run=True,
+        read_only=True,
+        order_proposals_path=proposals_path,
+        dry_run_orders_path=orders_path,
+        created_at="2026-05-08T15:00:00+09:00",
+    )
+
+    assert first["dry_run_order_id"] == second["dry_run_order_id"]
+    assert len(list_dry_run_orders(orders_path)) == 1
+
+
+def test_stop_trading_file_blocks_dry_run_order_record(tmp_path):
+    proposals_path = tmp_path / "order_proposals.json"
+    orders_path = tmp_path / "dry_run_orders.json"
+    stop_file = tmp_path / "STOP_TRADING"
+    stop_file.write_text("stop", encoding="utf-8")
+    proposal = _save(proposals_path)
+
+    try:
+        record_dry_run_order_from_proposal(
+            proposal["proposal_id"],
+            DRY_RUN_ORDER_APPROVAL_PHRASE,
+            dry_run=True,
+            read_only=True,
+            order_proposals_path=proposals_path,
+            dry_run_orders_path=orders_path,
+            stop_trading_file=stop_file,
+        )
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "kill switch" in str(exc)
+
+    assert list_dry_run_orders(orders_path) == []
+
+
+def test_buy_watch_source_status_is_not_dry_run_order_eligible(tmp_path):
+    proposals_path = tmp_path / "order_proposals.json"
+    orders_path = tmp_path / "dry_run_orders.json"
+    proposal = _save(proposals_path, _proposal(source_status="BUY_WATCH"))
+
+    try:
+        record_dry_run_order_from_proposal(
+            proposal["proposal_id"],
+            DRY_RUN_ORDER_APPROVAL_PHRASE,
+            dry_run=True,
+            read_only=True,
+            order_proposals_path=proposals_path,
+            dry_run_orders_path=orders_path,
+        )
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "not dry-run order eligible" in str(exc)
+
+    assert list_dry_run_orders(orders_path) == []
 
 
 def test_dry_run_false_stops(tmp_path):
@@ -213,11 +327,18 @@ def test_list_dry_run_orders_script_outputs_rows(tmp_path, capsys, monkeypatch):
                 "price": 11_904_180,
                 "size": "0.00008000",
                 "estimated_jpy": 952.33,
+                "notional_jpy": 952.33,
+                "entry_price": 11_904_180,
+                "stop_loss": 10_416_157.0,
+                "take_profit": 13_094_598.0,
+                "max_loss_jpy": 119.04,
+                "source_signal_id": "btc_jpy_20260508_090000_buy_candidate",
                 "reason": "BUY_CANDIDATE",
                 "status": "dry_run_recorded",
                 "send_to_exchange": False,
                 "requires_manual_confirmation": True,
                 "approval_phrase_confirmed": True,
+                "approval_status": "confirmed",
                 "read_only": True,
                 "dry_run": True,
             }
@@ -233,6 +354,9 @@ def test_list_dry_run_orders_script_outputs_rows(tmp_path, capsys, monkeypatch):
     assert "dry_btc_jpy_20260508_001" in output
     assert "proposal_test_001" in output
     assert "BTC_JPY | BTC | BUY" in output
+    assert "max_loss=119.04" in output
+    assert "source_signal=btc_jpy_20260508_090000_buy_candidate" in output
+    assert "approval=confirmed" in output
 
 
 def test_dry_run_order_from_proposal_cli_noninteractive_records(tmp_path, capsys, monkeypatch):

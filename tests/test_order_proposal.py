@@ -80,6 +80,22 @@ def test_buy_proposal_is_not_generated_below_min_quantity():
     assert "minimum quantity" in reason
 
 
+def test_buy_watch_does_not_generate_order_proposal():
+    prices = [100] * 230
+    assessment = build_alert_assessment(
+        _make_rows(prices),
+        {"last": 99.0, "timestamp": "2026-04-29T00:00:00Z"},
+        None,
+        BTC_JPY_ALERT_CONFIG,
+    )
+
+    proposal, reason = generate_order_proposal(assessment, proposal_jpy=1_000.0, source_status="BUY_WATCH")
+
+    assert assessment.buy_status == "BUY_WATCH"
+    assert proposal is None
+    assert "注文案生成対象外" in reason
+
+
 def test_sell_proposal_is_generated_for_take_profit_stop_loss_and_timeout():
     rows = _make_rows([100] * 220)
     position = PositionInput(
