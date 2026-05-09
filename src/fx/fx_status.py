@@ -68,7 +68,7 @@ class FXAssessment:
     next_action: str          # 日本語 next action テキスト
     current_price: float
     market_data_timestamp: str
-    stale_level: str          # "fresh" | "warning" | "invalid"
+    stale_level: str          # "fresh" | "warning" | "invalid" | "market_closed"
     stale_reason: str
     is_stale_invalid: bool
     stop_loss: Optional[float]

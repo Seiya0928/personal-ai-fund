@@ -86,15 +86,20 @@ def main() -> None:
     except Exception:
         open_trades = 0
 
-    # 全体 status
-    overall_status = "OK" if stale_level != "invalid" else "NG"
+    # 全体 status: invalid のみ NG。market_closed は OK 扱い
+    overall_status = "NG" if stale_level == "invalid" else "OK"
+    market_context = ""
+    if stale_level == "market_closed":
+        market_context = " ※FX市場休場中（週末・月曜早朝）—データの古さは想定内"
+    elif stale_level == "warning":
+        market_context = " ※データがやや古い（平日）"
 
     print(f"Status: {overall_status}")
     print(f"Last run: {last_run}")
     print(f"FX status: {fx_status}")
     print(f"Market data timestamp: {market_ts}")
     print(f"Market data age: {age_str}")
-    print(f"Stale level: {stale_level}")
+    print(f"Stale level: {stale_level}{market_context}")
     print(f"Stale reason: {stale_reason}")
     print(f"Latest signal id: {signal_id}")
     _print_counts(proposal_count, open_trades)
