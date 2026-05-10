@@ -3,6 +3,50 @@
 GMOコイン Public API を使った自分専用AIファンドの初期プロジェクト。
 口座開設審査待ちの間に、**認証不要のPublic APIだけ**でデータ収集・保存・バックテスト・レポート生成を動かす。
 
+## Daily Operations
+
+> 詳細は [docs/operations.md](docs/operations.md) を参照。
+
+### 基本方針
+
+普段は手動実行しない。BTC と FX は launchd で自動実行される。手動で見るのは health check のみ。
+
+### 自動実行（launchd）
+
+| 対象 | スクリプト | 実行時刻（JST） |
+|------|-----------|----------------|
+| BTC | `scripts/run_daily_btc_alert.sh` | 09:00 / 15:00 / 22:00 |
+| FX | `scripts/run_fx_daily.py` | 00:00 / 06:00 / 12:00 |
+
+Mac がスリープ中は実行されない。watch-only / paper trade 段階では許容。実注文前には VPS 等の常時稼働環境へ移行すること（→ [移行方針](#常時稼働環境への移行方針)）。
+
+### 状態確認（手動）
+
+```bash
+cd /Users/apple/personal-ai-fund
+./venv/bin/python scripts/check_btc_alert_health.py
+./venv/bin/python scripts/check_fx_signal_health.py
+```
+
+### ログ確認
+
+```bash
+tail -80 logs/btc_dip_alert_$(date +%Y%m%d).log
+tail -80 logs/fx_usdjpy_launchd.log
+```
+
+### Daily Personal Report（研究・集計）
+
+```bash
+./venv/bin/python scripts/run_daily_personal_report.py --save-watch-signal --evaluate-watch-signals
+```
+
+### Legacy スクリプト
+
+> ⚠️ `scripts/run_fx_usdjpy_signal.py` は旧FXシグナル処理。現在の launchd では **使用されていない**。原則実行しない。
+
+---
+
 ## 構成
 
 ```
@@ -569,8 +613,15 @@ pytest tests/ -v
 > 現時点では注文送信用アダプタを接続せず、シグナル生成・保存・レポート作成・注文提案保存だけを行います。
 
 ### シグナル生成
+
+> ⚠️ **Deprecated / Legacy**: `run_fx_usdjpy_signal.py` は旧バージョン。現在の launchd は `scripts/run_fx_daily.py` を使用している。通常はこのスクリプトを直接実行しない。
+
 ```bash
+# 旧版（原則使わない）
 python scripts/run_fx_usdjpy_signal.py
+
+# 現行版（launchd が自動実行）
+DRY_RUN=true READ_ONLY=true ./venv/bin/python scripts/run_fx_daily.py
 ```
 
 - 価格データ不足、スプレッド過大、価格スナップショット異常、重要指標前後は `SKIP`
