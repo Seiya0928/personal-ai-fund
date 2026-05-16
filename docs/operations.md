@@ -4,6 +4,124 @@
 
 ---
 
+## 現在の運用フェーズ（2026-05-16 時点）
+
+| 対象 | フェーズ | ステータス |
+|------|---------|-----------|
+| **BTC** | 自動監視フェーズ（Phase 1） | `BUY_WATCH` — 監視のみ |
+| **FX** | 自動監視フェーズ（Phase 1） | `FX_WATCH` — 監視のみ |
+| **競艇** | データ収集完了待ち | — |
+
+**現在できること / できないこと**
+
+- ✅ health check で状態確認する
+- ✅ ログ・レポートを読む
+- ✅ proposal 一覧・dry-run 記録を読む
+- ❌ `BUY_WATCH` / `FX_WATCH` で手動購入しない
+- ❌ `BUY_WATCH` / `FX_WATCH` で注文案を作らない
+- ❌ 実注文は **まだ禁止**（Phase 3 以降まで）
+- ❌ `DRY_RUN=false` / `READ_ONLY=false` にしない
+- ❌ `live_order_once.py` を実行しない
+
+---
+
+## CANDIDATE が出た時の手順
+
+### BTC で `BUY_CANDIDATE` が出た場合
+
+```bash
+# 1. health check で現在状態を確認する
+./venv/bin/python scripts/check_btc_alert_health.py
+
+# 2. レポートで詳細を確認する
+cat reports/btc_jpy_dip_alert_$(date +%Y%m%d).md
+
+# 3. 注文案を確認する
+./venv/bin/python scripts/list_order_proposals.py
+
+# 4. dry-run 注文記録を作る（実注文ではない）
+./venv/bin/python scripts/dry_run_order_from_proposal.py --proposal-id <ID>
+# → プロンプトに "RECORD DRY RUN ORDER" を入力
+
+# 5. dry-run 記録を確認する
+./venv/bin/python scripts/list_dry_run_orders.py
+```
+
+> ⛔ ステップ 4 を終えても**実注文は絶対にしない**。
+
+### FX で `FX_CANDIDATE` が出た場合
+
+```bash
+# 1. health check で現在状態を確認する
+./venv/bin/python scripts/check_fx_signal_health.py
+
+# 2. レポートで詳細を確認する（直近のレポートを確認）
+ls -lt reports/ | head -5
+
+# 3. FX 注文案を確認する
+./venv/bin/python scripts/list_fx_order_proposals.py
+
+# 4. dry-run 注文記録を作る（実注文ではない）
+./venv/bin/python scripts/record_fx_dry_run_order.py --proposal-id <ID>
+# → プロンプトに "RECORD DRY RUN ORDER" を入力
+
+# 5. dry-run 記録を確認する
+./venv/bin/python scripts/list_dry_run_orders.py
+```
+
+> ⛔ ステップ 4 を終えても**実注文は絶対にしない**。
+
+---
+
+## 触ってよいコマンド / 触らないコマンド
+
+### ✅ 触ってよいコマンド
+
+```bash
+# 状態確認
+./venv/bin/python scripts/check_btc_alert_health.py
+./venv/bin/python scripts/check_fx_signal_health.py
+
+# ログ確認
+tail -80 logs/btc_dip_alert_$(date +%Y%m%d).log
+tail -80 logs/fx_usdjpy_launchd.log
+
+# シグナル・提案・paper trade の閲覧
+./venv/bin/python scripts/list_signal_history.py
+./venv/bin/python scripts/list_order_proposals.py
+./venv/bin/python scripts/list_fx_order_proposals.py
+./venv/bin/python scripts/list_paper_trades.py
+./venv/bin/python scripts/list_dry_run_orders.py
+
+# CANDIDATE 時のみ dry-run 注文記録（上記「CANDIDATE が出た時の手順」参照）
+./venv/bin/python scripts/dry_run_order_from_proposal.py --proposal-id <ID>
+./venv/bin/python scripts/record_fx_dry_run_order.py --proposal-id <ID>
+```
+
+### ❌ 触らないコマンド
+
+| コマンド / 操作 | 理由 |
+|----------------|------|
+| `scripts/live_order_once.py` | 実注文経路。Phase 4 以降まで使わない |
+| `DRY_RUN=false` に変更 | 実注文が有効になる |
+| `READ_ONLY=false` に変更 | 実注文が有効になる |
+| GMO / FX Private API 注文送信 | 実注文経路 |
+| `BUY_WATCH` / `FX_WATCH` での手動購入 | CANDIDATE 条件を満たしていない |
+| `scripts/run_fx_usdjpy_signal.py` | 旧版スクリプト。launchd には使われていない |
+
+---
+
+## Mac スリープと常時稼働環境
+
+- **現段階**（watch-only / paper trade / dry-run）は Mac launchd で許容する
+- Mac スリープ中の実行取りこぼしは、watch-only 段階では**許容**する（ログに `WARNING: missed expected run` として記録される）
+- **実注文に進む前**（Phase 3 移行時）には Mac launchd から VPS 等の常時稼働環境へ移行すること
+- 理由：エントリー機会損失より、**保有中の利確・損切り・timeout exit を逃すリスクの方が大きい**ため
+
+移行先の候補と手順は [docs/roadmap.md](roadmap.md) の Phase 3 を参照。
+
+---
+
 ## スクリプト分類
 
 ### A. 自動実行（launchd）

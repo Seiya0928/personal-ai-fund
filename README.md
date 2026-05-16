@@ -3,6 +3,30 @@
 GMOコイン Public API を使った自分専用AIファンドの初期プロジェクト。
 口座開設審査待ちの間に、**認証不要のPublic APIだけ**でデータ収集・保存・バックテスト・レポート生成を動かす。
 
+## 現在の運用フェーズ
+
+> 詳細は [docs/operations.md](docs/operations.md) および [docs/roadmap.md](docs/roadmap.md) を参照。
+
+**現在地: Phase 1 — Watch-only**
+
+| 対象 | フェーズ | 現在ステータス |
+|------|---------|---------------|
+| BTC | 自動監視フェーズ | `BUY_WATCH` — 監視のみ |
+| FX | 自動監視フェーズ | `FX_WATCH` — 監視のみ |
+| 競艇 | データ収集完了待ち | — |
+
+- **WATCH では買わない。** `BUY_WATCH` / `FX_WATCH` は通知を確認するだけ。
+- **CANDIDATE が出たら**: proposal 確認 → dry-run 注文記録のみ。実注文はしない。
+- **実注文はまだ禁止。** `live_order_once.py` を実行しない。`DRY_RUN=false` にしない。
+
+```bash
+# 毎朝の確認はこれだけ
+./venv/bin/python scripts/check_btc_alert_health.py
+./venv/bin/python scripts/check_fx_signal_health.py
+```
+
+---
+
 ## Daily Operations
 
 > 詳細は [docs/operations.md](docs/operations.md) を参照。
