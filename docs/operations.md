@@ -71,6 +71,8 @@ ls -lt reports/ | head -5
 
 > ⛔ ステップ 4 を終えても**実注文は絶対にしない**。
 
+> 将来 `BUY_CANDIDATE` から実運用へ進む条件・手順・禁止事項の詳細は → **[live_trading_readiness.md](live_trading_readiness.md)**
+
 ---
 
 ## 触ってよいコマンド / 触らないコマンド

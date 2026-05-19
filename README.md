@@ -5,7 +5,7 @@ GMOコイン Public API を使った自分専用AIファンドの初期プロジ
 
 ## 現在の運用フェーズ
 
-> 詳細は [docs/operations.md](docs/operations.md) および [docs/roadmap.md](docs/roadmap.md) を参照。
+> 詳細は [docs/operations.md](docs/operations.md) / [docs/roadmap.md](docs/roadmap.md) / [docs/live_trading_readiness.md](docs/live_trading_readiness.md) を参照。
 
 **現在地: Phase 1 — Watch-only**
 
