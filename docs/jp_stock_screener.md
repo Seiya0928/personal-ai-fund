@@ -28,15 +28,30 @@
 ## 触ってよいコマンド
 
 ```bash
-# スクリーニング実行（毎朝 or 任意）
+# ── 基本実行 ─────────────────────────────────────────────────────────
+# デフォルト: 固定 65 銘柄
 ./venv/bin/python scripts/run_jp_stock_screener.py
 
-# メール送信付きで実行（SMTP 設定済みの場合）
+# メール送信付き（SMTP 設定済みの場合）
 ./venv/bin/python scripts/run_jp_stock_screener.py --send-email
 
-# 送信せずにメール本文プレビューを CLI に出力する
+# 送信せずにメール本文プレビューだけ確認
 ./venv/bin/python scripts/run_jp_stock_screener.py --dry-run-notify
 
+# ── JPX ユニバース（東証全銘柄）─────────────────────────────────────
+# まず CSV を更新する（初回 or 月次）
+./venv/bin/python scripts/update_jp_stock_universe.py
+
+# JPX ユニバースから先頭 50 銘柄でテスト
+./venv/bin/python scripts/run_jp_stock_screener.py --universe-source jpx --limit 50
+
+# プライム市場 100 銘柄
+./venv/bin/python scripts/run_jp_stock_screener.py --universe-source jpx --market prime --limit 100
+
+# プライム全件（約 1574 銘柄、取得に約 8 分かかる）
+./venv/bin/python scripts/run_jp_stock_screener.py --universe-source jpx --market prime
+
+# ── 確認 ────────────────────────────────────────────────────────────
 # ヘルスチェック
 ./venv/bin/python scripts/check_jp_stock_screener_health.py
 
@@ -46,6 +61,9 @@ cat reports/jp_stock_screener_$(date +%Y%m%d).md
 
 # 履歴を確認
 cat state/jp_stock_screening_history.json | python3 -m json.tool | tail -50
+
+# 取得失敗銘柄を確認
+cat state/jp_stock_fetch_errors.json
 ```
 
 ---
@@ -78,15 +96,77 @@ cat state/jp_stock_screening_history.json | python3 -m json.tool | tail -50
 
 ---
 
+## 銘柄ユニバース
+
+### --universe-source fixed（デフォルト）
+
+`src/jp_stocks/fetcher.py` の `STOCK_UNIVERSE` — 東証上場の代表銘柄 **65 銘柄**。  
+launchd 自動実行はこのモードのまま。
+
+### --universe-source jpx
+
+`data/jp_stock_universe.csv` を使用 — JPX 公開の上場銘柄一覧から生成した **3,747 銘柄**（2026-05 時点）。  
+プライム 1,574 / スタンダード 1,577 / グロース 596。ETF・REIT・PRO Market 等は除外済み。
+
+#### CSV 形式
+
+| 列名 | 説明 |
+|------|------|
+| `code` | 4桁コード（新形式: `130A` 等も含む） |
+| `name` | 銘柄名（全角英数を半角に正規化済み） |
+| `market` | `Prime` / `Standard` / `Growth` |
+| `sector_33` | 33業種区分（例: 輸送用機器） |
+| `sector_17` | 17業種区分（例: 自動車・輸送機） |
+| `yfinance_symbol` | `{code}.T`（yfinance 取得時に使用） |
+
+#### CSV の更新方法
+
+```bash
+# 月次 or 必要に応じて JPX から最新一覧を取得する
+./venv/bin/python scripts/update_jp_stock_universe.py
+
+# ダウンロードせず既存 XLS を使う場合
+./venv/bin/python scripts/update_jp_stock_universe.py --no-download --xls /path/to/data_j.xls
+```
+
+> CSV がない状態で `--universe-source jpx` を実行すると `FileNotFoundError` になる。先に `update_jp_stock_universe.py` を実行すること。
+
+### オプション
+
+| オプション | 説明 | デフォルト |
+|-----------|------|-----------|
+| `--universe-source fixed\|jpx` | 銘柄ソース | `fixed` |
+| `--market prime\|standard\|growth\|all` | 市場フィルター | `all` |
+| `--limit N` | 取得銘柄数の上限 | 制限なし |
+
+#### 推奨実行手順（jpx）
+
+```bash
+# 1. まず limit 付きで動作確認
+./venv/bin/python scripts/run_jp_stock_screener.py --universe-source jpx --limit 50
+
+# 2. 市場を絞って試す
+./venv/bin/python scripts/run_jp_stock_screener.py --universe-source jpx --market prime --limit 100
+
+# 3. 全件（注意: プライム全件で約 8 分、全銘柄で約 20 分かかる）
+./venv/bin/python scripts/run_jp_stock_screener.py --universe-source jpx --market prime
+```
+
+> ⚠️ **launchd 自動実行はまだ `--universe-source fixed`（デフォルト）のまま**。  
+> jpx 全件への移行は、十分な動作確認後に手動で plist を更新すること。
+
+---
+
 ## データ取得
 
 - **データソース**: yfinance (Yahoo Finance)
 - **遅延**: 15分以上の遅延あり（リアルタイムではない）
-- **対象**: 東証上場の代表銘柄 65 銘柄（`src/jp_stocks/fetcher.py` の `STOCK_UNIVERSE`）
 - **取得期間**: 直近 35 日分（20日平均出来高算出のため）
 - **stale 判定**: データ日付が 4 日以上前の場合
+- **取得失敗の扱い**: 失敗銘柄はスクリーニング結果に含めず、`state/jp_stock_fetch_errors.json` に記録される
+- **health WARNING 条件**: エラー率 > 20% または エラー件数 > 20 件
 
-> **注意**: 無料データは欠損・遅延・取得失敗がある。研究用として扱うこと。
+> **注意**: 無料データは欠損・遅延・取得失敗がある。jpx 全銘柄ではある程度の失敗は許容範囲内。研究用として扱うこと。
 
 ---
 
@@ -134,7 +214,8 @@ ALERT_EMAIL_TO=recipient@example.com
 src/jp_stocks/
   __init__.py          ← モジュール宣言（実注文なし宣言）
   models.py            ← データクラス: StockQuote, ScreeningSignal, ScreeningResult
-  fetcher.py           ← yfinance データ取得 + STOCK_UNIVERSE（65銘柄）
+  fetcher.py           ← yfinance データ取得 + STOCK_UNIVERSE（65銘柄固定）
+  universe.py          ← 銘柄ユニバース管理（fixed / jpx CSV）
   screener.py          ← スクリーニングロジック
   signal_history.py    ← JSON 履歴保存（state/jp_stock_screening_history.json）
   reporter.py          ← Markdown レポート生成
@@ -142,11 +223,16 @@ src/jp_stocks/
   notifier.py          ← メール通知（build_subject / build_body / send_screening_email）
 
 scripts/
-  run_jp_stock_screener.py          ← メインエントリーポイント（--send-email / --dry-run-notify）
+  run_jp_stock_screener.py          ← メインエントリーポイント（--universe-source / --market / --limit）
   check_jp_stock_screener_health.py ← ヘルスチェック
+  update_jp_stock_universe.py       ← JPX から銘柄ユニバース CSV を更新する
+
+data/
+  jp_stock_universe.csv             ← JPX 上場銘柄一覧（3,747 銘柄、月次更新）
 
 state/
   jp_stock_screening_history.json   ← 実行履歴 (最大 90 エントリ)
+  jp_stock_fetch_errors.json        ← 最終実行の取得失敗銘柄リスト
 
 reports/
   jp_stock_screener_YYYYMMDD.md     ← 日次レポート
@@ -157,6 +243,7 @@ tests/
   test_jp_stock_health.py     ← ヘルスチェックテスト
   test_jp_stock_safety.py     ← 安全性テスト（実注文なし確認）
   test_jp_stock_notifier.py   ← メール通知テスト（27 テスト）
+  test_jp_stock_universe.py   ← ユニバース管理テスト（27 テスト）
 ```
 
 ---

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 from src.jp_stocks.models import (
     JP_STOCK_CANDIDATE,
@@ -81,6 +82,9 @@ def run_screening(
     quotes: list[StockQuote],
     errors: list[str],
     data_source: str,
+    universe_source: str = "fixed",
+    market_filter: str = "all",
+    limit: Optional[int] = None,
 ) -> ScreeningResult:
     """全銘柄をスクリーニングして ScreeningResult を返す。"""
     signals = [screen_quote(q) for q in quotes]
@@ -118,6 +122,9 @@ def run_screening(
         candidate_count=candidate_count,
         signals=signals,
         errors=errors,
+        universe_source=universe_source,
+        market_filter=market_filter,
+        limit=limit,
     )
 
 

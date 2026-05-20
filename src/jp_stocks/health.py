@@ -11,8 +11,9 @@ from src.jp_stocks.signal_history import get_last_entry
 logger = logging.getLogger(__name__)
 
 JST = timezone(timedelta(hours=9))
-STALE_RUN_HOURS = 48  # 最終実行から何時間以上で WARNING にするか
-MAX_ACCEPTABLE_ERRORS = 20  # エラー件数がこれを超えると WARNING
+STALE_RUN_HOURS = 48   # 最終実行から何時間以上で WARNING にするか
+MAX_ACCEPTABLE_ERRORS = 20   # エラー件数がこれを超えると WARNING（固定閾値）
+MAX_ERROR_RATE = 0.20        # エラー率がこれを超えると WARNING（割合）
 
 
 @dataclass
@@ -66,11 +67,16 @@ def check_health() -> HealthResult:
             last_entry=last,
         )
 
+    total = last.get("total", 0)
+    universe_source = last.get("universe_source", "fixed")
+    market_filter = last.get("market_filter", "all")
+
     details.append(
-        f"スクリーニング: {last.get('total', 0)} 銘柄 / "
+        f"スクリーニング: {total} 銘柄 / "
         f"CANDIDATE={last.get('candidate', 0)} / "
         f"WATCH={last.get('watch', 0)}"
     )
+    details.append(f"ユニバース: {universe_source} / 市場: {market_filter}")
 
     # 警告判定
     warnings: list[str] = []
@@ -82,8 +88,12 @@ def check_health() -> HealthResult:
         warnings.append(f"最終実行から {age_hours:.0f} 時間経過（閾値 {STALE_RUN_HOURS}h）")
 
     error_count = last.get("error_count", 0)
-    if error_count > MAX_ACCEPTABLE_ERRORS:
-        warnings.append(f"データ取得エラーが {error_count} 件あります")
+    error_rate = error_count / max(total, 1)
+    if error_count > MAX_ACCEPTABLE_ERRORS or error_rate > MAX_ERROR_RATE:
+        warnings.append(
+            f"データ取得エラーが {error_count} 件 "
+            f"({error_rate * 100:.1f}%) あります"
+        )
 
     if warnings:
         return HealthResult(
@@ -105,7 +115,7 @@ def render_health(result: HealthResult) -> str:
     """HealthResult をターミナル表示用の文字列にフォーマットする。"""
     icon = {"OK": "✅", "WARNING": "⚠️", "NG": "❌"}.get(result.status, "?")
     lines = [
-        f"[JP Stock Screener Health]",
+        "[JP Stock Screener Health]",
         f"  Status : {icon} {result.status}",
         f"  Message: {result.message}",
     ]

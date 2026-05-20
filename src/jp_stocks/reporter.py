@@ -19,6 +19,13 @@ def generate_report(result: ScreeningResult) -> str:
 
     lines: list[str] = []
 
+    # ユニバース情報
+    universe_label = result.universe_source
+    if result.market_filter != "all":
+        universe_label += f" / market={result.market_filter}"
+    if result.limit is not None:
+        universe_label += f" / limit={result.limit}"
+
     # ヘッダー
     lines += [
         "# 日本株スクリーニング結果",
@@ -27,6 +34,7 @@ def generate_report(result: ScreeningResult) -> str:
         f"**データ取得元**: {result.data_source}",
         f"**データ日付**: {result.data_date or 'N/A'}",
         f"**データ状態**: {stale_label}",
+        f"**ユニバース**: {universe_label}",
         "",
         "> ⛔ このレポートは研究用スクリーニングのみ。実注文・証券API発注は一切行わない。",
         "",
@@ -36,6 +44,12 @@ def generate_report(result: ScreeningResult) -> str:
         "",
         "| 状態 | 件数 |",
         "|------|------|",
+        f"| ユニバース | {result.universe_source} |",
+        f"| 市場フィルター | {result.market_filter} |",
+        *(
+            [f"| 取得上限 | {result.limit} |"]
+            if result.limit is not None else []
+        ),
         f"| スクリーニング対象 | {result.total_screened} 銘柄 |",
         f"| **JP_STOCK_CANDIDATE** | **{result.candidate_count}** |",
         f"| JP_STOCK_WATCH | {result.watch_count} |",

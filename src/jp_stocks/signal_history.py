@@ -35,6 +35,9 @@ def append_result(result: ScreeningResult) -> None:
         "data_source": result.data_source,
         "data_date": result.data_date,
         "is_stale": result.is_stale,
+        "universe_source": result.universe_source,
+        "market_filter": result.market_filter,
+        "limit": result.limit,
         "total": result.total_screened,
         "skip": result.skip_count,
         "watch": result.watch_count,
@@ -74,8 +77,32 @@ def append_result(result: ScreeningResult) -> None:
     )
     logger.info(f"履歴保存: {STATE_PATH} (total entries={len(history)})")
 
+    # エラー銘柄リストを別ファイルに保存（レビュー用）
+    if result.errors:
+        _save_fetch_errors(result)
+
 
 def get_last_entry() -> Optional[dict]:
     """最新のスクリーニング結果エントリを返す。なければ None。"""
     history = load_history()
     return history[-1] if history else None
+
+
+_ERRORS_PATH = _PROJECT_ROOT / "state" / "jp_stock_fetch_errors.json"
+
+
+def _save_fetch_errors(result: ScreeningResult) -> None:
+    """取得失敗銘柄リストを state/jp_stock_fetch_errors.json に保存する。"""
+    record = {
+        "run_at": result.run_at.isoformat(),
+        "universe_source": result.universe_source,
+        "total": result.total_screened,
+        "error_count": len(result.errors),
+        "errors": result.errors,
+    }
+    _ERRORS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _ERRORS_PATH.write_text(
+        json.dumps(record, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    logger.info(f"エラー銘柄保存: {_ERRORS_PATH} ({len(result.errors)} 件)")

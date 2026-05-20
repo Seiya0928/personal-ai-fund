@@ -76,6 +76,10 @@ class ScreeningResult:
     candidate_count: int
     signals: list[ScreeningSignal]
     errors: list[str] = field(default_factory=list)
+    # ユニバース情報（拡張対応）
+    universe_source: str = "fixed"
+    market_filter: str = "all"
+    limit: Optional[int] = None
 
     @property
     def candidate_signals(self) -> list[ScreeningSignal]:

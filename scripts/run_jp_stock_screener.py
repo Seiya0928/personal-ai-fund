@@ -5,6 +5,8 @@
     ./venv/bin/python scripts/run_jp_stock_screener.py
     ./venv/bin/python scripts/run_jp_stock_screener.py --send-email
     ./venv/bin/python scripts/run_jp_stock_screener.py --dry-run-notify
+    ./venv/bin/python scripts/run_jp_stock_screener.py --universe-source jpx --limit 50
+    ./venv/bin/python scripts/run_jp_stock_screener.py --universe-source jpx --market prime --limit 100
 
 禁止事項:
     - 実注文・証券API発注は一切行わない
@@ -21,11 +23,12 @@ from pathlib import Path
 # プロジェクトルートを sys.path に追加
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.jp_stocks.fetcher import DATA_SOURCE, STOCK_UNIVERSE, fetch_all_quotes
+from src.jp_stocks.fetcher import DATA_SOURCE, fetch_quotes_for_universe
 from src.jp_stocks.notifier import send_screening_email
 from src.jp_stocks.reporter import generate_report, save_report
 from src.jp_stocks.screener import run_screening
 from src.jp_stocks.signal_history import append_result
+from src.jp_stocks.universe import MARKET_FILTERS, UNIVERSE_SOURCES, get_universe
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,6 +51,25 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="送信せずメール本文プレビューを CLI に出力する",
     )
+    parser.add_argument(
+        "--universe-source",
+        choices=UNIVERSE_SOURCES,
+        default="fixed",
+        help="銘柄ユニバース: fixed=65銘柄固定 / jpx=data/jp_stock_universe.csv（デフォルト: fixed）",
+    )
+    parser.add_argument(
+        "--market",
+        choices=MARKET_FILTERS,
+        default="all",
+        help="市場フィルター: prime / standard / growth / all（デフォルト: all）",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="取得銘柄数の上限（デフォルト: 上限なし）",
+    )
     return parser.parse_args()
 
 
@@ -56,21 +78,37 @@ def main() -> None:
 
     logger.info("=" * 55)
     logger.info("日本株スクリーニング bot 開始")
-    logger.info(f"対象銘柄数: {len(STOCK_UNIVERSE)}")
     logger.info("※ 実注文なし・研究用スクリーニングのみ")
+    logger.info(f"ユニバース: {args.universe_source} / 市場: {args.market} / 上限: {args.limit or '制限なし'}")
     if args.send_email:
         logger.info("メール通知: 有効 (--send-email)")
     if args.dry_run_notify:
         logger.info("メール通知: dry-run プレビューモード (--dry-run-notify)")
     logger.info("=" * 55)
 
-    # Step 1: データ取得
-    logger.info("Step 1/4: yfinance からデータ取得中...")
-    quotes, errors = fetch_all_quotes()
+    # Step 1: ユニバース構築
+    logger.info("Step 1/5: 銘柄ユニバース取得中...")
+    universe = get_universe(
+        source=args.universe_source,
+        market_filter=args.market,
+        limit=args.limit,
+    )
+    logger.info(f"対象銘柄数: {len(universe)}")
 
-    # Step 2: スクリーニング
-    logger.info("Step 2/4: スクリーニング実行中...")
-    result = run_screening(quotes, errors, data_source=DATA_SOURCE)
+    # Step 2: データ取得
+    logger.info("Step 2/5: yfinance からデータ取得中...")
+    quotes, errors = fetch_quotes_for_universe(universe)
+
+    # Step 3: スクリーニング
+    logger.info("Step 3/5: スクリーニング実行中...")
+    result = run_screening(
+        quotes,
+        errors,
+        data_source=DATA_SOURCE,
+        universe_source=args.universe_source,
+        market_filter=args.market,
+        limit=args.limit,
+    )
 
     logger.info(
         f"結果: CANDIDATE={result.candidate_count} / "
@@ -79,17 +117,17 @@ def main() -> None:
         f"エラー={len(errors)}"
     )
 
-    # Step 3: レポート生成・保存
-    logger.info("Step 3/4: レポート生成中...")
+    # Step 4: レポート生成・保存
+    logger.info("Step 4/5: レポート生成中...")
     report_text = generate_report(result)
     report_path = save_report(result, report_text)
     logger.info(f"レポート: {report_path}")
 
-    # Step 4: 履歴保存
-    logger.info("Step 4/4: 履歴保存中...")
+    # Step 5: 履歴保存
+    logger.info("Step 5/5: 履歴保存中...")
     append_result(result)
 
-    # Step 5: メール通知
+    # メール通知
     email_result = send_screening_email(
         result=result,
         report_path=report_path,

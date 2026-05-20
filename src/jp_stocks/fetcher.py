@@ -143,6 +143,54 @@ def fetch_all_quotes(delay_sec: float = 0.3) -> tuple[list[StockQuote], list[str
     return quotes, errors
 
 
+def fetch_quotes_for_universe(
+    entries: list,
+    delay_sec: float = 0.3,
+) -> tuple[list[StockQuote], list[str]]:
+    """UniverseEntry のリストから全銘柄の日次データを取得する。
+
+    Parameters
+    ----------
+    entries : list[UniverseEntry]
+        universe.py の UniverseEntry インスタンスのリスト。
+    delay_sec : float
+        銘柄間の待機秒数（レート制限対策）。
+
+    Returns
+    -------
+    quotes : list[StockQuote]
+        取得成功・失敗を含む全銘柄のリスト。
+    errors : list[str]
+        エラーメッセージのリスト。
+    """
+    quotes: list[StockQuote] = []
+    errors: list[str] = []
+    total = len(entries)
+
+    for i, entry in enumerate(entries, 1):
+        meta = {
+            "name": entry.name,
+            "market": entry.market,
+            "sector": entry.sector_33 or entry.sector_17 or "その他",
+        }
+        try:
+            quote = _fetch_single(entry.code, meta)
+            quotes.append(quote)
+            if i % 20 == 0:
+                logger.info(f"  取得進捗: {i}/{total} 銘柄")
+        except Exception as exc:
+            msg = f"{entry.code} ({entry.name}): {exc}"
+            logger.warning(f"データ取得失敗 — {msg}")
+            errors.append(msg)
+            quotes.append(_failed_quote(entry.code, meta, str(exc)))
+
+        if i < total:
+            time.sleep(delay_sec)
+
+    logger.info(f"取得完了: {len(quotes)} 銘柄 / エラー {len(errors)} 件")
+    return quotes, errors
+
+
 def fetch_quotes_from_fixture(fixture: list[dict]) -> tuple[list[StockQuote], list[str]]:
     """テスト・デモ用 fixture データから StockQuote リストを生成する。
 
