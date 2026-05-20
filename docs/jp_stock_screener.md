@@ -31,6 +31,12 @@
 # スクリーニング実行（毎朝 or 任意）
 ./venv/bin/python scripts/run_jp_stock_screener.py
 
+# メール送信付きで実行（SMTP 設定済みの場合）
+./venv/bin/python scripts/run_jp_stock_screener.py --send-email
+
+# 送信せずにメール本文プレビューを CLI に出力する
+./venv/bin/python scripts/run_jp_stock_screener.py --dry-run-notify
+
 # ヘルスチェック
 ./venv/bin/python scripts/check_jp_stock_screener_health.py
 
@@ -84,6 +90,44 @@ cat state/jp_stock_screening_history.json | python3 -m json.tool | tail -50
 
 ---
 
+## メール通知
+
+launchd 自動実行は `--send-email` 付きで動くため、SMTP を設定すれば毎平日 15:45 に結果が届く。
+
+### SMTP 設定（`.env`）
+
+```dotenv
+ALERT_EMAIL_SMTP_HOST=smtp.gmail.com
+ALERT_EMAIL_SMTP_PORT=587
+ALERT_EMAIL_USERNAME=your@gmail.com
+ALERT_EMAIL_PASSWORD=app-password
+ALERT_EMAIL_FROM=your@gmail.com
+ALERT_EMAIL_TO=recipient@example.com
+```
+
+### 件名フォーマット
+
+| 状況 | 件名 |
+|------|------|
+| CANDIDATE あり | `【JP Stock Screener】候補あり: CANDIDATE=N WATCH=M` |
+| WATCH のみ | `【JP Stock Screener】監視銘柄あり: WATCH=M` |
+| 候補なし | `【JP Stock Screener】候補なし` |
+
+### メール本文
+
+- 実行日時・データ取得元・銘柄数
+- CANDIDATE 一覧（最大 10 件、現在値・出来高比・理由）
+- WATCH 一覧（最大 10 件）
+- Next Action セクション
+- **必須免責事項**: 「実注文は行いません。これは研究用スクリーニング通知です。」
+
+### SMTP 未設定の場合
+
+設定なしで `--send-email` を渡すとスキップ（エラーにならない）。  
+`--dry-run-notify` なら CLI にプレビューだけ出力する。
+
+---
+
 ## ファイル構成
 
 ```
@@ -95,9 +139,10 @@ src/jp_stocks/
   signal_history.py    ← JSON 履歴保存（state/jp_stock_screening_history.json）
   reporter.py          ← Markdown レポート生成
   health.py            ← ヘルスチェック
+  notifier.py          ← メール通知（build_subject / build_body / send_screening_email）
 
 scripts/
-  run_jp_stock_screener.py          ← メインエントリーポイント
+  run_jp_stock_screener.py          ← メインエントリーポイント（--send-email / --dry-run-notify）
   check_jp_stock_screener_health.py ← ヘルスチェック
 
 state/
@@ -107,10 +152,11 @@ reports/
   jp_stock_screener_YYYYMMDD.md     ← 日次レポート
 
 tests/
-  test_jp_stock_screener.py  ← スクリーニング条件テスト
-  test_jp_stock_reporter.py  ← レポート生成テスト
-  test_jp_stock_health.py    ← ヘルスチェックテスト
-  test_jp_stock_safety.py    ← 安全性テスト（実注文なし確認）
+  test_jp_stock_screener.py   ← スクリーニング条件テスト
+  test_jp_stock_reporter.py   ← レポート生成テスト
+  test_jp_stock_health.py     ← ヘルスチェックテスト
+  test_jp_stock_safety.py     ← 安全性テスト（実注文なし確認）
+  test_jp_stock_notifier.py   ← メール通知テスト（27 テスト）
 ```
 
 ---

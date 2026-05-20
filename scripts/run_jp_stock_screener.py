@@ -3,6 +3,8 @@
 
 実行方法:
     ./venv/bin/python scripts/run_jp_stock_screener.py
+    ./venv/bin/python scripts/run_jp_stock_screener.py --send-email
+    ./venv/bin/python scripts/run_jp_stock_screener.py --dry-run-notify
 
 禁止事項:
     - 実注文・証券API発注は一切行わない
@@ -11,6 +13,7 @@
 """
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
 from pathlib import Path
@@ -19,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.jp_stocks.fetcher import DATA_SOURCE, STOCK_UNIVERSE, fetch_all_quotes
-from src.jp_stocks.health import check_health, render_health
+from src.jp_stocks.notifier import send_screening_email
 from src.jp_stocks.reporter import generate_report, save_report
 from src.jp_stocks.screener import run_screening
 from src.jp_stocks.signal_history import append_result
@@ -33,11 +36,32 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="日本株スクリーニング bot（実注文なし・研究用）")
+    parser.add_argument(
+        "--send-email",
+        action="store_true",
+        help="スクリーニング結果をメール送信する",
+    )
+    parser.add_argument(
+        "--dry-run-notify",
+        action="store_true",
+        help="送信せずメール本文プレビューを CLI に出力する",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+
     logger.info("=" * 55)
     logger.info("日本株スクリーニング bot 開始")
     logger.info(f"対象銘柄数: {len(STOCK_UNIVERSE)}")
     logger.info("※ 実注文なし・研究用スクリーニングのみ")
+    if args.send_email:
+        logger.info("メール通知: 有効 (--send-email)")
+    if args.dry_run_notify:
+        logger.info("メール通知: dry-run プレビューモード (--dry-run-notify)")
     logger.info("=" * 55)
 
     # Step 1: データ取得
@@ -65,7 +89,15 @@ def main() -> None:
     logger.info("Step 4/4: 履歴保存中...")
     append_result(result)
 
-    # サマリー表示
+    # Step 5: メール通知
+    email_result = send_screening_email(
+        result=result,
+        report_path=report_path,
+        requested=args.send_email or args.dry_run_notify,
+        dry_run_notify=args.dry_run_notify,
+    )
+
+    # ── サマリー表示 ─────────────────────────────────────────────────
     logger.info("=" * 55)
     logger.info("スクリーニング完了")
 
@@ -94,6 +126,28 @@ def main() -> None:
 
     if errors:
         logger.warning(f"⚠️  データ取得エラー {len(errors)} 件")
+
+    # ── メール結果表示 ────────────────────────────────────────────────
+    if args.dry_run_notify and email_result.payload_preview:
+        print("")
+        print("── メール本文プレビュー ──────────────────────────────")
+        print(f"件名: {email_result.payload_preview['subject']}")
+        print("─" * 52)
+        print(email_result.payload_preview["body"])
+        print("─" * 52)
+
+    if args.send_email or args.dry_run_notify:
+        if email_result.skipped_reason == "EMAIL_SMTP_CONFIG not set":
+            logger.warning("メール通知スキップ: EMAIL_SMTP_CONFIG not set")
+            logger.warning("  .env に ALERT_EMAIL_SMTP_HOST / PORT / USERNAME / PASSWORD / FROM / TO を設定してください")
+        elif email_result.sent:
+            logger.info("メール送信成功")
+        elif email_result.skipped_reason == "dry_run_notify=true":
+            logger.info("メール送信スキップ (dry-run)")
+        elif email_result.error:
+            logger.error(f"メール送信失敗: {email_result.error}")
+        else:
+            logger.info(f"メール送信スキップ: {email_result.skipped_reason}")
 
     logger.info("")
     logger.info("Next Action:")

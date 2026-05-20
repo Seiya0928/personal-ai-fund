@@ -142,7 +142,7 @@ cat reports/jp_stock_screener_$(date +%Y%m%d).md
 |-----------|--------------|----------------|
 | `scripts/run_daily_btc_alert.sh` | `com.personal-ai-fund.btc-alert` | 09:00 / 15:00 / 22:00（毎日） |
 | `scripts/run_fx_daily.py` | `com.personal-ai-fund.fx-usdjpy-signal` | 00:00 / 06:00 / 12:00（毎日） |
-| `scripts/run_jp_stock_screener.py` | `com.personal-ai-fund.jp-stock-screener` | **15:45（平日月〜金のみ）** |
+| `scripts/run_jp_stock_screener.py --send-email` | `com.personal-ai-fund.jp-stock-screener` | **15:45（平日月〜金のみ）** |
 
 **日本株スクリーナー自動実行の注意事項：**
 - 東証クローズ直後（15:00）の 15:45 JST に実行し、当日終値ベースで翌日の候補を抽出する
@@ -180,6 +180,12 @@ cd /Users/apple/personal-ai-fund
 # 手動でスクリーニングを実行する
 ./venv/bin/python scripts/run_jp_stock_screener.py
 
+# 送信せずにメール本文プレビューを確認する（SMTP 設定不要）
+./venv/bin/python scripts/run_jp_stock_screener.py --dry-run-notify
+
+# SMTP 設定済みならメール送信付きで実行する（launchd と同じ動作）
+./venv/bin/python scripts/run_jp_stock_screener.py --send-email
+
 # 当日レポートを確認する
 cat reports/jp_stock_screener_$(date +%Y%m%d).md
 
@@ -188,6 +194,21 @@ tail -50 logs/jp_stock_screener_launchd.log
 ```
 
 > ⛔ `JP_STOCK_CANDIDATE` が出た場合でも**実注文しない**。チャート・出来高・板を人間が確認するだけ。
+
+#### メール通知の SMTP 設定
+
+`.env` に以下を追加すると launchd 自動実行時にメールが届く（`--send-email` はすでに plist に追加済み）:
+
+```dotenv
+ALERT_EMAIL_SMTP_HOST=smtp.gmail.com
+ALERT_EMAIL_SMTP_PORT=587
+ALERT_EMAIL_USERNAME=your@gmail.com
+ALERT_EMAIL_PASSWORD=app-password
+ALERT_EMAIL_FROM=your@gmail.com
+ALERT_EMAIL_TO=recipient@example.com
+```
+
+設定なしでも動作する（メール送信をスキップするだけ）。詳細は `docs/jp_stock_screener.md` の「メール通知」セクションを参照。
 
 ---
 
