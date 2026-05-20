@@ -4,21 +4,24 @@
 
 ---
 
-## 現在の運用フェーズ（2026-05-16 時点）
+## 現在の運用フェーズ（2026-05-20 時点）
 
-| 対象 | フェーズ | ステータス |
-|------|---------|-----------|
-| **BTC** | 自動監視フェーズ（Phase 1） | `BUY_WATCH` — 監視のみ |
-| **FX** | 自動監視フェーズ（Phase 1） | `FX_WATCH` — 監視のみ |
-| **競艇** | データ収集完了待ち | — |
+| 対象 | フェーズ | ステータス | 自動実行時刻 |
+|------|---------|-----------|-------------|
+| **BTC** | 自動監視フェーズ（Phase 1） | `BUY_WATCH` — 監視のみ | 09:00 / 15:00 / 22:00 JST |
+| **FX** | 自動監視フェーズ（Phase 1） | `FX_WATCH` — 監視のみ | 00:00 / 06:00 / 12:00 JST |
+| **日本株** | スクリーニングフェーズ（Phase 1） | `JP_STOCK_WATCH/CANDIDATE` — 候補抽出のみ | **平日 15:45 JST** |
+| **競艇** | データ収集完了待ち | — | — |
 
 **現在できること / できないこと**
 
 - ✅ health check で状態確認する
 - ✅ ログ・レポートを読む
 - ✅ proposal 一覧・dry-run 記録を読む
+- ✅ 日本株スクリーニング結果を確認する（`JP_STOCK_WATCH` はチャート確認のみ）
 - ❌ `BUY_WATCH` / `FX_WATCH` で手動購入しない
 - ❌ `BUY_WATCH` / `FX_WATCH` で注文案を作らない
+- ❌ `JP_STOCK_CANDIDATE` でも実注文しない（候補確認のみ）
 - ❌ 実注文は **まだ禁止**（Phase 3 以降まで）
 - ❌ `DRY_RUN=false` / `READ_ONLY=false` にしない
 - ❌ `live_order_once.py` を実行しない
@@ -83,10 +86,15 @@ ls -lt reports/ | head -5
 # 状態確認
 ./venv/bin/python scripts/check_btc_alert_health.py
 ./venv/bin/python scripts/check_fx_signal_health.py
+./venv/bin/python scripts/check_jp_stock_screener_health.py  # 日本株
 
 # ログ確認
 tail -80 logs/btc_dip_alert_$(date +%Y%m%d).log
 tail -80 logs/fx_usdjpy_launchd.log
+tail -80 logs/jp_stock_screener_launchd.log                  # 日本株 launchd ログ
+
+# 日本株スクリーニングレポートを確認
+cat reports/jp_stock_screener_$(date +%Y%m%d).md
 
 # シグナル・提案・paper trade の閲覧
 ./venv/bin/python scripts/list_signal_history.py
@@ -132,8 +140,15 @@ tail -80 logs/fx_usdjpy_launchd.log
 
 | スクリプト | launchd ラベル | 実行時刻（JST） |
 |-----------|--------------|----------------|
-| `scripts/run_daily_btc_alert.sh` | `com.personal-ai-fund.btc-alert` | 09:00 / 15:00 / 22:00 |
-| `scripts/run_fx_daily.py` | `com.personal-ai-fund.fx-usdjpy-signal` | 00:00 / 06:00 / 12:00 |
+| `scripts/run_daily_btc_alert.sh` | `com.personal-ai-fund.btc-alert` | 09:00 / 15:00 / 22:00（毎日） |
+| `scripts/run_fx_daily.py` | `com.personal-ai-fund.fx-usdjpy-signal` | 00:00 / 06:00 / 12:00（毎日） |
+| `scripts/run_jp_stock_screener.py` | `com.personal-ai-fund.jp-stock-screener` | **15:45（平日月〜金のみ）** |
+
+**日本株スクリーナー自動実行の注意事項：**
+- 東証クローズ直後（15:00）の 15:45 JST に実行し、当日終値ベースで翌日の候補を抽出する
+- Mac がスリープ中は実行されない。逃した分は補完されない（watch-only 段階では許容）
+- 実注文なし。`JP_STOCK_WATCH` はチャート確認のみ。`JP_STOCK_CANDIDATE` でも実注文しない
+- 実注文前（Phase 3 移行時）には VPS 等の常時稼働環境へ移行すること
 
 > **注意**: Mac がスリープ中の時間帯は実行されない。逃した分は自動補完されない。
 > watch-only / paper trade 段階では許容。実注文前には VPS 等の常時稼働環境へ移行すること。
@@ -152,7 +167,27 @@ cd /Users/apple/personal-ai-fund
 
 # FX の状態確認
 ./venv/bin/python scripts/check_fx_signal_health.py
+
+# 日本株スクリーナーの状態確認
+./venv/bin/python scripts/check_jp_stock_screener_health.py
 ```
+
+### C. 日本株スクリーナー（任意実行）
+
+平日 15:45 の自動実行に加え、任意のタイミングで手動実行できる。
+
+```bash
+# 手動でスクリーニングを実行する
+./venv/bin/python scripts/run_jp_stock_screener.py
+
+# 当日レポートを確認する
+cat reports/jp_stock_screener_$(date +%Y%m%d).md
+
+# launchd ログを確認する
+tail -50 logs/jp_stock_screener_launchd.log
+```
+
+> ⛔ `JP_STOCK_CANDIDATE` が出た場合でも**実注文しない**。チャート・出来高・板を人間が確認するだけ。
 
 ---
 

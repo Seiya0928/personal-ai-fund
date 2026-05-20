@@ -59,7 +59,7 @@ STOCK_UNIVERSE: dict[str, dict[str, str]] = {
     "9433": {"name": "KDDI",                 "market": "Prime", "sector": "通信"},
     "9984": {"name": "ソフトバンクグループ", "market": "Prime", "sector": "情報通信"},
     "4689": {"name": "LINEヤフー",           "market": "Prime", "sector": "情報通信"},
-    "9613": {"name": "NTTデータグループ",    "market": "Prime", "sector": "情報通信"},
+    # 9613 NTTデータグループ: 2024年再編後 yfinance で取得不可 → 除外
     "4307": {"name": "野村総合研究所",       "market": "Prime", "sector": "情報サービス"},
     # 小売・消費財
     "9983": {"name": "ファーストリテイリング", "market": "Prime", "sector": "小売"},
