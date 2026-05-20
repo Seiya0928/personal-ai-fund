@@ -5,7 +5,7 @@ GMOコイン Public API を使った自分専用AIファンドの初期プロジ
 
 ## 現在の運用フェーズ
 
-> 詳細は [docs/operations.md](docs/operations.md) / [docs/roadmap.md](docs/roadmap.md) / [docs/live_trading_readiness.md](docs/live_trading_readiness.md) を参照。
+> 詳細は [docs/operations.md](docs/operations.md) / [docs/roadmap.md](docs/roadmap.md) / [docs/live_trading_readiness.md](docs/live_trading_readiness.md) / [docs/jp_stock_screener.md](docs/jp_stock_screener.md) を参照。
 
 **現在地: Phase 1 — Watch-only**
 
@@ -13,6 +13,7 @@ GMOコイン Public API を使った自分専用AIファンドの初期プロジ
 |------|---------|---------------|
 | BTC | 自動監視フェーズ | `BUY_WATCH` — 監視のみ |
 | FX | 自動監視フェーズ | `FX_WATCH` — 監視のみ |
+| **日本株** | **スクリーニングフェーズ** | `JP_STOCK_WATCH/CANDIDATE` — 候補抽出のみ |
 | 競艇 | データ収集完了待ち | — |
 
 - **WATCH では買わない。** `BUY_WATCH` / `FX_WATCH` は通知を確認するだけ。
